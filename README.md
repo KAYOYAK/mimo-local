@@ -3,6 +3,8 @@
 > 完全本地的 AI 编程助手：**MiMo Code + MiMo 9B + Xiaomi-OCR-0**，三个能力同时在线。
 > 不联网，不需要账号，所有数据在本机。
 
+![MiMo Local](docs/screenshot.png)
+
 一个 Windows 桌面程序。打开就是编程界面，模型跑在本地显卡上，
 需要看图时模型会自己调用本地的 OCR —— 不需要切换模式，也不需要切窗口。
 
