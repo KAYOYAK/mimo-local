@@ -79,12 +79,43 @@ def claim_auto_degrade():
 
 
 def claim_64k_estimate():
-    """README 的资源占用表建立在「64K」这个前提上。"""
-    from core import hardware
-    plan = hardware.plan_chat()
-    check(plan.ctx in (8192, 16384, 32768, 65536),
-          "上下文必须是按显存推导出的合法档位（不是拍脑袋的数）",
-          f"ctx={plan.ctx}, kv={plan.kv_type}, auto_fit={plan.auto_fit}")
+    """README 的资源占用表建立在「按显存自动推导」这个前提上。
+
+    表驱动测纯函数 derive_ctx —— 不是「返回值在某个集合里」那种假绿
+    （24 GB 卡上返回 8192 也能过）。这里逐档验证边界。
+    """
+    from core import hardware as hw
+    table = [
+        (24.0, 65536, "24 GB 顶格 64K"),
+        (12.0, 65536, "12 GB 给 64K"),
+        (11.9, 65536, "实测机 11.9 GB 给 64K"),
+        (10.0, 65536, "10 GB 边界仍是 64K"),
+        (9.9, 32768, "9.9 GB 降到 32K"),
+        (8.0, 32768, "8 GB 给 32K"),
+        (7.9, 16384, "7.9 GB 降到 16K"),
+        (6.0, 16384, "6 GB 给 16K"),
+        (5.9, 8192, "5.9 GB 降到 8K"),
+        (1.0, 8192, "1 GB 保底 8K"),
+        (0.0, 8192, "读不到显存保底 8K"),
+    ]
+    bad = []
+    for vram, want, desc in table:
+        got = hw.derive_ctx(vram)
+        if got != want:
+            bad.append(f"{desc}: 期望 {want} 实际 {got}")
+    check(not bad,
+          "README 说「显存低会自动降级」→ derive_ctx 每档边界都要对",
+          "全部档位正确" if not bad else "; ".join(bad))
+
+    # KV 精度同理
+    kv_bad = []
+    for vram, want in ((12.0, "q8_0"), (9.0, "q8_0"), (8.9, "q4_0"), (0.0, "q4_0")):
+        got = hw.derive_kv(vram)
+        if got != want:
+            kv_bad.append(f"{vram} GB: 期望 {want} 实际 {got}")
+    check(not kv_bad,
+          "README 说「显存紧张会压 KV 精度」→ derive_kv 边界要对",
+          "全部正确" if not kv_bad else "; ".join(kv_bad))
 
 
 def claim_no_orphan():
@@ -105,6 +136,14 @@ def claim_no_orphan():
         check(callable(getattr(engine.Engine, "stop", None)),
               "Engine.stop() 必须存在（关引擎不能只关日志句柄）",
               "stop 是方法")
+
+    # 光有函数不够 —— 没人调用就等于注释（这正是原来 bug 的形态）
+    ui_src = _read_repo_file("ui_qt.py")
+    if ui_src:
+        calls = ui_src.count("kill_pid(")
+        check(calls >= 2,
+              "pid 收尸必须在「启动」和「退出」两处被真正调用（不是只有函数）",
+              f"ui_qt.py 里 kill_pid( 出现 {calls} 次")
 
 
 def claim_ocr_as_tool():
@@ -189,11 +228,17 @@ def claim_abort():
     check(has_abort,
           "长回合必须能中断 → 必须有 abort 接口",
           "abort_session 存在" if has_abort else "缺函数")
+
     ui = _read_repo_file("ui_qt.py")
-    if ui:
-        t = ui
-        check("btn_stop" in t and "stop_round" in t,
-              "界面上必须有停止按钮", "btn_stop + stop_round")
+    if not ui:
+        skip("界面上必须有停止按钮", "打包后读不到源码")
+        return
+    # 光有按钮不够：按钮必须**接到**中断逻辑上，否则就是个装饰
+    wired = "clicked.connect(self.stop_round)" in ui
+    defined = "def stop_round" in ui
+    check(wired and defined,
+          "停止按钮必须真的接上 stop_round（不是摆着好看）",
+          f"按钮={('btn_stop' in ui)}, connect={wired}, 方法={defined}")
 
 
 def claim_audit_log():
@@ -202,10 +247,53 @@ def claim_audit_log():
     if not ui:
         skip("bash 命令审计日志", "打包后读不到源码")
         return
-    t = ui
-    check("commands.log" in t,
-          "bash: allow 意味着能跑任意命令 → 必须有命令审计日志",
-          "commands.log 被写入")
+    # 光有 "commands.log" 这个字符串不够（注释里提一句就过了）——
+    # 必须同时有「定义」和「调用」
+    defined = "def _audit_command" in ui
+    called = "_audit_command(" in ui and ui.count("_audit_command(") >= 2
+    check(defined and called,
+          "bash: allow 意味着能跑任意命令 → 审计日志必须被定义且被调用",
+          f"定义={defined}, 调用点数={ui.count('_audit_command(')}")
+
+
+def claim_version_one_source():
+    """版本号在全仓库只应出现一次定义。"""
+    import re
+    offenders = []
+    skip_files = {"config.py"}
+    for p in config.ROOT.rglob("*.py"):
+        rel = p.relative_to(config.ROOT)
+        if any(part in (".git", "build", "dist", "agent", "__pycache__") for part in rel.parts):
+            continue
+        if str(rel) in skip_files:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        # 只找「模块级的 VERSION = "x.y.z"」这种定义，不找引用
+        for m in re.finditer(r'^VERSION\s*=\s*"[0-9]+\.[0-9]+\.[0-9]+"', text, re.M):
+            offenders.append(f"{rel}: {m.group(0)}")
+    check(not offenders,
+          "版本号只能有一个来源（config.VERSION），其他地方不许再写死",
+          "只有 config.py 定义" if not offenders else "; ".join(offenders))
+
+
+def claim_readme_switches():
+    """README 里提到的我们自己的 --开关 必须真的存在。"""
+    readme = _read_repo_file("README.md")
+    main_src = _read_repo_file("main.py")
+    if not readme or not main_src:
+        skip("README 的开关都存在", "打包后读不到源码")
+        return
+    import re
+    flags = set(re.findall(r'--[a-z][a-z-]{2,20}', readme))
+    # 只查我们自己的 CLI 开关（llama-server 那些不归 main.py 管）
+    ours = {"--selfcheck", "--claims", "--report", "--ocr"}
+    missing = sorted(f for f in flags if f in ours and f not in main_src)
+    check(not missing,
+          "README 提到的 --开关 必须都能在 main.py 里找到",
+          "全部存在" if not missing else "缺: " + ", ".join(missing))
 
 
 def claim_no_hardcoded_dev_path():

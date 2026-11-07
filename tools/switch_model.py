@@ -64,7 +64,7 @@ def find_mmproj(model: Path) -> Path | None:
 
 
 def current_model() -> Path:
-    return config.CHAT_MODEL
+    return config.current_model()
 
 
 def set_model(model: Path) -> None:
@@ -130,7 +130,7 @@ def main() -> int:
 
     set_model(chosen)
     print(f"\n  已切换到：{chosen.name}")
-    print("  config.py 已更新。重启程序生效。")
+    print("  settings.json 已更新（当前模型已切换）。重启程序生效。")
     return 0
 
 

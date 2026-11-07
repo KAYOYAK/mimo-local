@@ -92,7 +92,7 @@ def check_engine(c: Checker):
 
 def check_models(c: Checker):
     c.section("模型")
-    for label, p in (("聊天模型", config.CHAT_MODEL), ("视觉投影", config.CHAT_MMPROJ)):
+    for label, p in (("聊天模型", config.current_model()), ("视觉投影", config.current_mmproj())):
         if p.is_file():
             c.ok(f"{label}  {p.name}  {human(p.stat().st_size)}")
         else:
@@ -238,6 +238,69 @@ def check_config(c: Checker):
         c.warn("配置文件还没生成（第一次启动引擎时才会写）")
 
 
+def check_render(c: Checker):
+    """渲染管线：模型正文必须真的能显示出来。
+
+    为什么要单独检查这个（真实事故）：
+       `_on_part` 里曾经多了一个无条件的 return，所有 text part 在创建文本块
+       之前就被丢掉 —— 界面上能看到工具卡片和「思考中」，就是看不到回答。
+       而当时的自检和声明断言全在查「某个字符串在不在源码里」，
+       没有一条和「用户能不能看见回答」有交集。
+
+       现在决策逻辑抽到了 core/render.py（不依赖 Qt），这里直接喂假 part。
+    """
+    c.section("渲染管线")
+    try:
+        from core.render import decide
+    except Exception as e:
+        c.fail(f"core/render.py 加载失败：{e}")
+        return
+
+    # 正文必须能渲染
+    step, reason = decide({"type": "text", "text": "你好"}, {})
+    if step is not None and step.text == "你好":
+        c.ok(f"正文能渲染（{reason}）")
+    else:
+        c.fail(f"正文被丢弃了（{reason}）—— 用户会看不到模型回答")
+
+    # 思考过程和工具调用也要能渲染
+    r1, _ = decide({"type": "reasoning", "text": "想想"}, {})
+    r2, _ = decide({"type": "tool", "tool": "bash",
+                    "state": {"status": "completed", "input": {"command": "ls"}}}, {})
+    if r1 is not None and r2 is not None:
+        c.ok("思考过程与工具调用能渲染")
+    else:
+        c.fail("思考过程或工具调用被丢弃")
+
+    # 不该显示的必须被挡住
+    bad = [
+        ({"type": "text", "text": "x", "synthetic": True}, "synthetic 隐藏文本"),
+        ({"type": "step-start"}, "step-start"),
+        ({"type": "text", "text": "  "}, "空文本"),
+    ]
+    leaked = [name for part, name in bad if decide(part, {})[0] is not None]
+    if leaked:
+        c.warn(f"这些本该隐藏却渲染了：{', '.join(leaked)}")
+    else:
+        c.ok("隐藏文本 / 分隔标记 / 空内容都被正确过滤")
+
+    # echo 语义：发过一次就只吞一次
+    e = {"继续": 1}
+    d1, _ = decide({"type": "text", "text": "继续"}, e)
+    d2, _ = decide({"type": "text", "text": "继续"}, e)
+    if d1 is None and d2 is not None:
+        c.ok("echo 过滤只吞一次（不会永久吞掉同文本回答）")
+    else:
+        c.fail(f"echo 过滤语义不对：第一次吞={d1 is None}, 第二次吞={d2 is None}")
+
+    # 超长截断
+    d3, _ = decide({"type": "text", "text": "x" * 5000}, {})
+    if d3 is not None and "已截断" in d3.text:
+        c.ok(f"超长文本会截断（{len(d3.text)} 字符）")
+    else:
+        c.fail("超长文本没有截断")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="MiMo Local 自检")
     ap.add_argument("--report", action="store_true", help="额外生成诊断报告")
@@ -253,6 +316,7 @@ def main() -> int:
     check_engine(c)
     check_models(c)
     check_hardware(c)
+    check_render(c)
     check_dirs(c)
     check_ports(c)
     check_config(c)

@@ -122,6 +122,32 @@ class ChatPlan:
         return {"f16": "f16", "q8_0": "q8_0", "q4_0": "q4_0"}.get(self.kv_type, self.kv_type)
 
 
+def derive_ctx(vram_gb: float, ctx_max: int = 65536) -> int:
+    """按显存推导上下文长度。
+
+    抽成纯函数是为了能被声明断言直接测（表驱动），
+    不用起引擎、不用 GPU。
+    """
+    if vram_gb >= 10:
+        ctx = 65536
+    elif vram_gb >= 8:
+        ctx = 32768
+    elif vram_gb >= 6:
+        ctx = 16384
+    elif vram_gb > 0:
+        ctx = 8192
+    else:
+        ctx = 8192
+    return min(ctx, ctx_max)
+
+
+def derive_kv(vram_gb: float) -> str:
+    """按显存推导 KV 缓存精度。只压缓存，不动模型权重。"""
+    if vram_gb <= 0 or vram_gb < 9:
+        return "q4_0"
+    return "q8_0"
+
+
 def plan_chat() -> ChatPlan:
     """按本机硬件推导聊天引擎参数。
 
@@ -131,7 +157,7 @@ def plan_chat() -> ChatPlan:
     notes: list[str] = []
     vram = get_nvidia_vram_gb()
     ram = get_ram_gb()
-    model_gb = model_size_gb(config.CHAT_MODEL)
+    model_gb = model_size_gb(config.current_model())
 
     # ---- 上下文长度 ----
     ctx_max = getattr(config, "CHAT_CTX_MAX", 65536)
@@ -142,18 +168,9 @@ def plan_chat() -> ChatPlan:
     else:
         # 按显存推导。10 GB 这条线来自实测：
         # 11.9 GB 显存跑 64K + q8_0 + flash-attn 实测占 9880 MiB，余量够。
-        if vram >= 10:
-            ctx = 65536
-        elif vram >= 8:
-            ctx = 32768
-        elif vram >= 6:
-            ctx = 16384
-        elif vram > 0:
-            ctx = 8192
-        else:
-            ctx = 8192
+        if vram <= 0:
             notes.append("读不到显存大小，按保守值起步")
-        ctx = min(ctx, ctx_max)
+        ctx = derive_ctx(vram, ctx_max)
         if vram > 0:
             notes.append(f"上下文 {ctx}（按显存 {vram} GB 自动，上限 {ctx_max}）")
 

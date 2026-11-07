@@ -46,8 +46,8 @@ def run_case(name: str, extra: list[str]) -> int:
     print(f"\n  [{name}]  启动前基线 {base} MiB")
     cmd = [
         str(config.ENGINE),
-        "-m", str(config.CHAT_MODEL),
-        "--mmproj", str(config.CHAT_MMPROJ),
+        "-m", str(config.current_model()),
+        "--mmproj", str(config.current_mmproj()),
         "--host", "127.0.0.1", "--port", "8080",
         "--ctx-size", "65536",
         "--n-gpu-layers", "99",

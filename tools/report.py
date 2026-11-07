@@ -127,8 +127,8 @@ def build_report(checker=None) -> str:
     add("【组件】")
     for label, p in (
         ("推理引擎", config.ENGINE),
-        ("聊天模型", config.CHAT_MODEL),
-        ("视觉投影", config.CHAT_MMPROJ),
+        ("聊天模型", config.current_model()),
+        ("视觉投影", config.current_mmproj()),
         ("OCR 模型", config.OCR_MODEL),
         ("OCR 投影", config.OCR_MMPROJ),
         ("MiMo Code", config.MIMO_EXE),
@@ -149,7 +149,7 @@ def build_report(checker=None) -> str:
 
     # ---------- 模型指纹 ----------
     add("【模型指纹】")
-    add(f"  聊天模型  {_sha256_quick(config.CHAT_MODEL)}")
+    add(f"  聊天模型  {_sha256_quick(config.current_model())}")
     add(f"  OCR 模型  {_sha256_quick(config.OCR_MODEL)}")
     add()
 

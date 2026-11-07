@@ -366,6 +366,7 @@ class MainWindow(QMainWindow):
             QMenu::separator {{ height: 1px; background: {C_LINE}; margin: 6px 8px; }}
         """)
         m.addAction("自检", self.run_selfcheck)
+        m.addAction("声明断言", self.run_claims)
         m.addAction("生成诊断报告", self.make_report)
         m.addSeparator()
         m.addAction("切换模型…", self.switch_model)
@@ -399,6 +400,42 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self._add_system_text(f"自检失败：{e}")
                 self.bridge.status.emit("自检失败", "err")
+            finally:
+                self._dirty = True
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def run_claims(self):
+        """跑声明断言，把结果贴进对话区。
+
+        为什么要有这个入口：一个只能靠命令行跑的工具，实际上没人跑。
+        声明断言的价值全在「经常被跑」—— 不跑就退化成注释。
+        """
+        import io
+        import contextlib
+        import re
+
+        self._add_system_text("正在检查 README 的承诺是否被代码兑现…")
+        self._dirty = True
+
+        def work():
+            buf = io.StringIO()
+            try:
+                from tools import claims as claims_mod
+                old = sys.argv
+                sys.argv = ["claims"]
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        code = claims_mod.main()
+                finally:
+                    sys.argv = old
+                text = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+                self._add_system_text(text.strip())
+                self.bridge.status.emit(
+                    "断言全部成立" if code == 0 else "断言有不符", "ok" if code == 0 else "err")
+            except Exception as e:
+                self._add_system_text(f"断言执行失败：{e}")
+                self.bridge.status.emit("断言失败", "err")
             finally:
                 self._dirty = True
 
@@ -586,8 +623,11 @@ class MainWindow(QMainWindow):
                 ok = ag.abort_session(self.agent, self.session_id)
                 self._add_system_text("⏹ 已中断本轮。" if ok else "中断失败（可能这一轮已经结束了）。")
                 self._dirty = True
-            finally:
-                self.bridge.status.emit("就绪", "ok")
+            except Exception:
+                pass
+            # 不在这里设「就绪」——busy 要等 send() 的 finally 才清，
+            # 状态栏说就绪而发送键还禁着，就是在撒谎。
+            # 让状态停在「正在中断…」，由 send() 收尾。
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -633,32 +673,13 @@ class MainWindow(QMainWindow):
 
     def _on_part(self, part: dict):
         pid = part.get("id") or ""
-        ptype = part.get("type") or ""
 
-        # step-start / step-finish 不显示，只是分隔
-        if ptype in ("step-start", "step-finish", "snapshot", "patch"):
-            return
-
-        # 系统注入的隐藏文本（memory 路径、instructions 等）
-        if part.get("synthetic"):
-            return
-
-        step = ag.parse_part(part)
+        # 决策逻辑在 core/render.py 里（纯函数，自检能脱离 Qt 直接测）。
+        # 这里只管把结果落到 items 上。
+        from core import render as rnd
+        step, reason = rnd.decide(part, self._echoes)
         if step is None:
             return
-
-        # 用户消息的 echo —— 我们已经自己显示过一遍了，不要再显示
-        if step.kind == "text":
-            _k = step.text.strip()
-            if self._echoes.get(_k, 0) > 0:
-                self._echoes[_k] -= 1
-                return
-            return
-
-        # 超长注入文本（实测见过 15090 字的 instructions 副本）——
-        # 真实回答不会有这么长，截断显示，免得刷屏
-        if step.kind == "text" and len(step.text) > 4000:
-            step.text = step.text[:4000] + "\n…（内容过长，已截断）"
 
         # 同一个 part 反复更新（流式）→ 找到原来那块改内容
         it = self._by_id.get(pid) if pid else None
@@ -717,23 +738,22 @@ class MainWindow(QMainWindow):
         SSE 断流（进程抖动、网络、重连）时，界面会停在半截；而 POST
         /message 的返回值本身就是最终完整消息。所以每轮结束后拉一次消息链，
         把没渲染过的 part 补上。流式负责「快」，这里负责「准」。
+
+        ⚠ 这个方法在 worker 线程被调用，**不能直接改 self.items** ——
+        GUI 线程的 _flush 定时器正在读它们，会渲染到「写了一半的 Item」。
+        所以走 bridge 把 part 送回 GUI 线程，由 _on_event 处理。
         """
         try:
             msgs = ag.get_messages(self.agent, sid)
         except Exception:
             return
-        added = 0
+        known = set(self._by_id.keys())
         for m in msgs:
             for p in m.get("parts", []):
                 pid = p.get("id")
-                if pid and pid not in self._by_id:
-                    try:
-                        self._on_part(p)
-                        added += 1
-                    except Exception:
-                        pass
-        if added:
-            self._dirty = True
+                if pid and pid not in known:
+                    # 只有 GUI 线程能碰 items；这里只发信号
+                    self.bridge.event.emit(ag.Event("message.part.updated", sid, part=p))
 
     def pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择项目目录")
@@ -745,6 +765,7 @@ class MainWindow(QMainWindow):
         self.session_id = None
         self.items.clear()
         self._by_id.clear()
+        self._echoes.clear()      # 换项目后 echo 计数要清，否则会串
         self._add(Item("welcome2", "divider"))
         self._add_system_text(f"项目目录：{self.workdir}")
 
@@ -882,6 +903,7 @@ class MainWindow(QMainWindow):
                 self.bridge.status.emit("出错", "err")
             finally:
                 self._set_busy(False)
+                self.bridge.status.emit("就绪", "ok")   # 和 busy 同时收尾，状态栏别撒谎
 
         threading.Thread(target=work, daemon=True).start()
 

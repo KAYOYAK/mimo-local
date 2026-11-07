@@ -19,7 +19,36 @@ from tkinter import messagebox, ttk
 
 APP_NAME = "MiMo Local"
 APP_EXE = "MiMoLocal.exe"
-VERSION = "1.0.0"
+
+
+def _read_version() -> str:
+    """从 config.py 里解析版本号，而不是再写一份。
+
+    之前这里写死 VERSION = "1.0.0"，而 config.py 是 1.0.2 —— 安装器界面和
+    「应用和功能」里的 DisplayVersion 会写成旧版本。版本号只能有一个来源。
+
+    不 import config：安装器是独立打包的，不该为了一个版本号把 PySide6
+    那一串依赖拉进来。
+    """
+    import re
+    try:
+        src = (Path(__file__).resolve().parent / "config.py").read_text(encoding="utf-8")
+        m = re.search(r'^VERSION\s*=\s*"([^"]+)"', src, re.M)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    # 打包后 config.py 在 exe 里，读不到 —— 退回到构建时写进来的值
+    try:
+        bundled = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "VERSION.txt"
+        if bundled.is_file():
+            return bundled.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return "0.0.0"
+
+
+VERSION = _read_version()
 
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "MiMoLocal"
 

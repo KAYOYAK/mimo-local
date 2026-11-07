@@ -240,11 +240,39 @@ def read_pid(pid_file: Path) -> int | None:
         return None
 
 
+def _pid_is_llama(pid: int) -> bool:
+    """确认这个 pid 现在真的是 llama-server。
+
+    为什么必须查：pid 文件可能是上次崩溃留下的，而 Windows 会回收 pid。
+    启动时和退出时都会调用 kill_pid —— 不校验的话可能 `taskkill /F` 掉
+    一个完全无关的进程。
+    """
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+    try:
+        r = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=10,
+            **_no_window_kwargs(),
+        )
+        out = (r.stdout or "").lower()
+        return "llama-server" in out or "llama" in out
+    except Exception:
+        return False
+
+
 def kill_pid(pid_file: Path) -> bool:
-    """按 pid 文件杀进程，然后删掉 pid 文件。返回是否真的杀了。"""
+    """按 pid 文件杀进程，然后删掉 pid 文件。返回是否真的杀了。
+
+    **先校验身份再杀** —— pid 会被 Windows 回收，盲杀可能杀掉无关进程。
+    """
     pid = read_pid(pid_file)
     killed = False
-    if pid:
+    if pid and _pid_is_llama(pid):
         try:
             if sys.platform == "win32":
                 subprocess.run(
@@ -256,6 +284,7 @@ def kill_pid(pid_file: Path) -> bool:
             killed = True
         except Exception:
             pass
+    # 不管杀没杀（pid 可能已经不属于我们了），pid 文件都该清掉
     try:
         pid_file.unlink(missing_ok=True)
     except Exception:

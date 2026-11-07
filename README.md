@@ -102,7 +102,7 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 
 - **自检** —— 29 项检查，一眼看出哪里坏了
 - **生成诊断报告** —— 硬件 / 引擎配置 / 模型指纹 / 日志尾部，一份文本
-- **切换模型** —— 扫描模型目录，换一个模型
+- **切换模型** —— 扫描模型目录换一个；状态存在 `settings.json`，重启生效
 - **打开日志目录**
 
 ---
@@ -152,7 +152,7 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 
 - **只支持 Windows。** 依赖 CUDA / Windows 路径 / cmd。
 - **要求 NVIDIA 显卡。** 没有 CUDA 会退回 CPU，9B 模型在 CPU 上慢到没法用。
-- **不使用任何网络。** 反过来说：模型和引擎必须提前放好，程序不会帮你下载。
+- **不使用任何网络。** 反过来说：模型和引擎必须提前放好，程序不会帮你下载。`agent` 的 `web` / `webfetch` 权限也设为 `deny`，模型自己抓不了网页。
 
 ---
 
@@ -163,15 +163,46 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 | 文件 | 干什么 |
 |---|---|
 | `config.py` | 所有路径、端口、采样参数。改配置只改这里 |
-| `core/hardware.py` | 按显存推导上下文 / KV 精度 / 卸载层数 |
-| `core/engine.py` | 起停 llama-server（两个引擎共用） |
+| `core/hardware.py` | 按显存推导上下文 / KV 精度 / 卸载层数（`derive_ctx` / `derive_kv` 是纯函数，可单测） |
+| `core/engine.py` | 起停 llama-server（两个引擎共用）+ pid 收尸 |
 | `core/agent.py` | 起停 `mimo serve`、写配置、订阅事件流、调 API |
+| `core/render.py` | **决定一个 part 要不要显示**（纯函数，不依赖 Qt，自检直接喂假数据） |
+| `core/settings.py` | 运行期状态（当前模型等），原子写 `settings.json` |
+| `core/logs.py` | 日志轮转 |
 | `ui_qt.py` | PySide6 界面 + 流式渲染 |
 | `tools/ocr.py` | OCR 工具，模型通过 bash 调它 |
-| `AGENTS.md` | **告诉模型「你有 OCR 工具」的那份说明** |
+| `tools/selfcheck.py` | 34 项自检（含渲染管线检查） |
+| `tools/claims.py` | **声明断言**：把本文档的承诺变成会失败的检查 |
+| `tools/report.py` | 诊断报告 |
+| `tools/verify_packaged.ps1` | 打包后路径验证（不需要显卡） |
+| `agent/config/AGENTS-ocr.md` | **运行时生成**的「你有 OCR 工具」说明 |
 
-关于 `AGENTS.md`：模型不是天生知道有 OCR 的。这份文件通过 MiMo Code 的
-`instructions` 配置注入到它的系统提示里。改这里可以改它的行为。
+关于 `AGENTS-ocr.md`：模型不是天生知道有 OCR 的。这份文件在每次启动时**按当前
+安装位置生成**（`core/agent.py::_write_agents_md`），然后通过 MiMo Code 的
+`instructions` 配置注入到系统提示里。仓库根目录那份静态 `AGENTS.md` 只是源码
+模式的占位，实际生效的是生成出来的那份。
+
+打包成 exe 后，`tools/ocr.py` 进了压缩包、磁盘上没有脚本文件，所以说明里会改用
+`MiMoLocal.exe --ocr <图片>` 子命令 —— 结果写到图片旁边的同名 `.md`。
+
+---
+
+## 自检与断言
+
+两个都是只读的，随时可以跑：
+
+```bash
+python main.py --selfcheck   # 34 项：路径、引擎、模型、硬件、渲染管线、端口、配置
+python main.py --claims      # 20 条：本文档的承诺是否被代码兑现
+```
+
+界面上在 `⋯` 菜单里也有这两个入口 —— 一个只能靠命令行跑的工具，实际上没人跑。
+
+`--claims` 值得单独说：它检查的是「README 说 X，代码是不是真的 X」。
+比如「README 说显存低会自动降级」→ 断言 `derive_ctx` 每档边界都对；
+「README 说不联网」→ 断言 agent 的 `web/webfetch` 是 `deny`；
+「README 说换模型不改源码」→ 断言 `set_model` 不写文件。
+不符的时候要么改代码，要么改这份文档，两者不能同时成立。
 
 ---
 
