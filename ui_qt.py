@@ -126,7 +126,7 @@ class Bridge(QObject):
 class Item:
     """对话区里的一块内容。part 更新时按 id 找回来改。"""
 
-    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role", "_pending", "tool_uri")
+    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role", "_pending", "tool_uri", "tool_img_id")
 
     def __init__(self, id_, kind, role="assistant"):
         self.id = id_
@@ -138,6 +138,7 @@ class Item:
         self.role = role
         self._pending = None
         self.tool_uri = ""
+        self.tool_img_id = ""
 
 
 class MainWindow(QMainWindow):
@@ -165,6 +166,8 @@ class MainWindow(QMainWindow):
         self._seen: set[str] = set()
         self._pending_images: list[Path] = []   # 待发送的图片
         self._img_uris: dict[str, bool] = {}     # 已注册进 QTextDocument 的图片
+        self._expanded: set[str] = set()         # 用户手动展开的折叠块
+        self._img_paths: dict[str, Path] = {}    # img_id → 原始路径（放大用）
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -289,6 +292,12 @@ class MainWindow(QMainWindow):
 
         # 对话区
         self.chat = QTextBrowser(objectName="chat")
+        self.chat.setOpenLinks(False)          # 链接由我们自己处理（折叠/放大）
+        self.chat.setOpenExternalLinks(False)
+        self.chat.anchorClicked.connect(self._on_anchor)
+        self.chat.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.chat.customContextMenuRequested.connect(self._chat_menu)
+        self.chat.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.chat.setOpenExternalLinks(True)
         bl.addWidget(self.chat, 1)
 
@@ -404,7 +413,7 @@ class MainWindow(QMainWindow):
         self._refresh_image_bar()
 
     def _refresh_image_bar(self):
-        """重建待发送图片条。"""
+        """重建待发送图片条：每张图显示缩略图 + 文件名，点 ✕ 去掉。"""
         lay = self._image_bar_layout
         while lay.count() > 1:          # 保留末尾的 stretch
             item = lay.takeAt(0)
@@ -413,18 +422,62 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
 
         for i, p in enumerate(self._pending_images):
-            chip = QPushButton(f"{p.name}  ✕")
-            chip.setToolTip(str(p))
+            # 一个小卡片：上缩略图，下文件名 + ✕
+            chip = QFrame(objectName="imgchip")
             chip.setStyleSheet(
-                f"QPushButton {{ background: {C_CARD}; color: {C_TXT2};"
-                f" border: 1px solid {C_LINE}; border-radius: 6px;"
-                f" padding: 4px 10px; font-size: 11px; }}"
-                f"QPushButton:hover {{ color: {C_ERR}; border-color: {C_ERR}; }}"
+                f"QFrame#imgchip {{ background: {C_CARD}; border: 1px solid {C_LINE};"
+                f" border-radius: 6px; }}"
             )
-            chip.clicked.connect(lambda _=False, idx=i: self._remove_image(idx))
+            cv = QVBoxLayout(chip)
+            cv.setContentsMargins(6, 6, 6, 4)
+            cv.setSpacing(3)
+
+            thumb = QLabel()
+            thumb.setFixedSize(72, 54)
+            thumb.setAlignment(Qt.AlignCenter)
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap(str(p))
+            if not pm.isNull():
+                thumb.setPixmap(pm.scaled(72, 54, Qt.KeepAspectRatio,
+                                          Qt.SmoothTransformation))
+            else:
+                thumb.setText("?")
+            thumb.setCursor(Qt.PointingHandCursor)
+            thumb.setToolTip(f"点开看大图：{p.name}")
+            thumb.mousePressEvent = lambda ev, path=p: self._zoom_path(path)
+            cv.addWidget(thumb)
+
+            name = p.name if len(p.name) <= 12 else p.name[:10] + "…"
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(2)
+            lb = QLabel(name)
+            lb.setStyleSheet(f"color: {C_TXT2}; font-size: 10px;")
+            lb.setToolTip(str(p))
+            row.addWidget(lb)
+            x = QPushButton("✕")
+            x.setFixedSize(14, 14)
+            x.setCursor(Qt.PointingHandCursor)
+            x.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {C_TXT3};"
+                f" border: none; font-size: 10px; padding: 0; }}"
+                f"QPushButton:hover {{ color: {C_ERR}; }}"
+            )
+            x.clicked.connect(lambda _=False, idx=i: self._remove_image(idx))
+            row.addWidget(x)
+            cv.addLayout(row)
+
             lay.insertWidget(i, chip)
 
         self.image_bar.setVisible(bool(self._pending_images))
+
+    def _zoom_path(self, path: Path):
+        """按路径放大图片（待发送区用，还没有 img_id）。"""
+        try:
+            import os
+            os.startfile(str(path))
+        except Exception:
+            pass
 
     def _remove_image(self, idx: int):
         if 0 <= idx < len(self._pending_images):
@@ -481,8 +534,12 @@ class MainWindow(QMainWindow):
             parts.append(
                 f"【用户发的图片：{img.name}】\n"
                 f"下面这张图片已经用本地 OCR 转成了文字（可能有少量识别误差，"
-                f"不影响理解）。这是**图片里的内容**，不是用户打的字：\n"
-                f"<<<\n{txt}\n>>>"
+                f"不影响理解）。这是**图片里的内容**，不是用户打的字，"
+                f"也是你能获得的**全部**图片信息：\n"
+                f"<<<\n{txt}\n>>>\n"
+                f"⚠ 你无法直接查看图片本身，也不需要去读任何文件或重新识别 —— "
+                f"上面这段就是图片的全部内容。如果这里没有你要的信息，"
+                f"就直接说「图片里没有这项信息」，不要去找文件。"
             )
         for img, err in failed:
             parts.append(f"【用户发的图片：{img.name}】\n这张图 OCR 识别失败（{err}）。")
@@ -503,6 +560,121 @@ class MainWindow(QMainWindow):
             )
 
         return "\n\n".join(parts)
+
+    def _on_anchor(self, url):
+        """处理点击：折叠/展开、放大图片。"""
+        s = url.toString()
+        if s.startswith("fold:"):
+            key = s[5:]
+            if key in self._expanded:
+                self._expanded.discard(key)
+            else:
+                self._expanded.add(key)
+            self._dirty = True
+            self._flush()
+            return
+        if s.startswith("zoom:"):
+            self._zoom_image(s[5:])
+            return
+
+    def _zoom_image(self, img_id: str):
+        """点缩略图看大图。优先用系统看图器，失败就在程序里弹窗。"""
+        path = self._img_paths.get(img_id)
+        if not path:
+            return
+        try:
+            import os
+            os.startfile(str(path))          # Windows 默认看图器
+        except Exception:
+            try:
+                from PySide6.QtGui import QPixmap
+                from PySide6.QtWidgets import QDialog, QLabel, QScrollArea
+                dlg = QDialog(self)
+                dlg.setWindowTitle(path.name)
+                dlg.resize(1000, 780)
+                lab = QLabel()
+                pm = QPixmap(str(path))
+                # 太大了就缩到窗口能放下，但比缩略图大得多
+                if pm.width() > 960:
+                    pm = pm.scaledToWidth(960, Qt.SmoothTransformation)
+                lab.setPixmap(pm)
+                sc = QScrollArea()
+                sc.setWidget(lab)
+                lay = QVBoxLayout(dlg)
+                lay.setContentsMargins(0, 0, 0, 0)
+                lay.addWidget(sc)
+                dlg.exec()
+            except Exception:
+                pass
+
+    def _chat_menu(self, pos):
+        """右键菜单。QTextBrowser 自带的菜单是英文的，这里全部中文化。"""
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        cur = self.chat.textCursor()
+        has_sel = cur.hasSelection()
+
+        a = menu.addAction("复制")
+        a.setEnabled(has_sel)
+        a.triggered.connect(self.chat.copy)
+        b = menu.addAction("全选")
+        b.triggered.connect(self.chat.selectAll)
+        menu.addSeparator()
+
+        c = menu.addAction("展开全部")
+        c.triggered.connect(self._expand_all)
+        d = menu.addAction("折叠全部")
+        d.triggered.connect(self._collapse_all)
+
+        menu.addSeparator()
+        e = menu.addAction("清空对话显示")
+        e.triggered.connect(self._clear_view)
+        menu.addSeparator()
+        f = menu.addAction("保存对话为文本…")
+        f.triggered.connect(self._save_chat)
+
+        menu.exec(self.chat.mapToGlobal(pos))
+
+    def _expand_all(self):
+        for it in self.items:
+            if it.kind in ("reasoning", "tool", "ocr"):
+                self._expanded.add(self._fold_key(it))
+        self._dirty = True
+        self._flush()
+
+    def _collapse_all(self):
+        self._expanded.clear()
+        self._dirty = True
+        self._flush()
+
+    def _clear_view(self):
+        self.items.clear()
+        self._by_id.clear()
+        self._expanded.clear()
+        self._add(Item("welcome0", "divider"))
+        self._dirty = True
+        self._flush()
+
+    def _save_chat(self):
+        from PySide6.QtWidgets import QFileDialog
+        f, _ = QFileDialog.getSaveFileName(
+            self, "保存对话", str(Path.home() / "mimo-chat.txt"),
+            "文本 (*.txt);;Markdown (*.md)")
+        if not f:
+            return
+        try:
+            Path(f).write_text(self.chat.toPlainText(), encoding="utf-8")
+            self.bridge.status.emit("已保存", "ok")
+        except Exception as e:
+            self.bridge.status.emit(f"保存失败：{e}", "err")
+
+    @staticmethod
+    def _fold_key(it) -> str:
+        """折叠状态用的唯一键。同一个 Item 在多次重绘之间要稳定。"""
+        if it.id:
+            return it.id
+        # 没有 id 的（系统消息等）用内存地址 —— 同一次会话里稳定
+        return f"{it.kind}-{id(it)}"
 
     # ================= 工具菜单 =================
 
@@ -691,12 +863,14 @@ class MainWindow(QMainWindow):
         self.items.append(it)
         self._dirty = True
 
-    def _ensure_image(self, path: Path) -> str:
-        """把图片注册进 QTextDocument，返回 HTML 里用的 URI。
+    def _ensure_image(self, path: Path) -> tuple[str, str]:
+        """把图片注册进 QTextDocument，返回 (uri, img_id)。
 
         QTextBrowser 不认 file:// 的 <img>（安全限制 + setHtml 会重置文档），
         必须用 document().addResource() 显式注册。注册过的缓存起来，
         否则每次 80ms 重绘都重新解码一遍图片，界面会卡。
+
+        img_id 用来做「点击放大」的链接标识（_img_paths 里存原路径）。
         """
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QImage, QTextDocument
@@ -704,13 +878,14 @@ class MainWindow(QMainWindow):
         try:
             p = Path(path)
             if not p.is_file():
-                return ""
-            uri = f"mimo-img-{abs(hash(str(p)))}"
+                return "", ""
+            img_id = f"img{abs(hash(str(p)))}"
+            uri = f"mimo-{img_id}"
             if uri in self._img_uris:
-                return uri
+                return uri, img_id
             img = QImage(str(p))
             if img.isNull():
-                return ""
+                return "", ""
             # 按显示区宽度缩一下，原图 4K 截图直接塞进去会撑爆
             max_w = 460
             if img.width() > max_w:
@@ -718,9 +893,10 @@ class MainWindow(QMainWindow):
             self.chat.document().addResource(
                 QTextDocument.ImageResource, QUrl(uri), img)
             self._img_uris[uri] = True
-            return uri
+            self._img_paths[img_id] = p
+            return uri, img_id
         except Exception:
-            return ""
+            return "", ""
 
     def _flush(self):
         """把 items 渲染成 HTML。节流到 80ms 一次。"""
@@ -732,7 +908,9 @@ class MainWindow(QMainWindow):
         # 但 document 对象还在，资源注册是挂在 document 上的）
         for it in self.items:
             if it.kind == "ocr" and it._pending:
-                it.tool_uri = self._ensure_image(it._pending)
+                uri, img_id = self._ensure_image(it._pending)
+                it.tool_uri = uri
+                it.tool_img_id = img_id
 
         parts = [f'<div style="line-height:1.65;">']
         for it in self.items:
@@ -753,39 +931,80 @@ class MainWindow(QMainWindow):
                     f'{html.escape(it.text).replace(chr(10), "<br>")}</div>'
                 )
             elif it.kind == "tool":
+                # 工具调用：默认折叠成一行，点开看完整参数。
+                # 一个任务常调十几次工具，全展开会把回答埋掉。
+                key = self._fold_key(it)
+                open_ = key in self._expanded
                 icon = "✓" if it.status == "completed" else ("✗" if it.status == "error" else "·")
                 color = C_OK if it.status == "completed" else (C_ERR if it.status == "error" else C_TXT3)
-                args = f'<div style="color:{C_TXT3};font-size:11px;margin-left:22px;">{html.escape(it.args)}</div>' if it.args else ""
-                parts.append(
-                    f'<div style="margin:8px 0 2px 0;font-size:12px;">'
-                    f'<span style="color:{color};">{icon}</span> '
-                    f'<span style="color:{C_ACCENT};">{html.escape(it.tool)}</span></div>{args}'
-                )
+                arrow = "▼" if open_ else "▶"
+                head = (f'<a href="fold:{key}" style="text-decoration:none;color:{C_TXT3};">'
+                        f'<span style="color:{color};">{arrow} {icon} {html.escape(it.tool)}</span>'
+                        f'</a>')
+                if it.args:
+                    head += f' <span style="color:{C_TXT3};font-size:11px;">' \
+                            f'{html.escape(it.args[:90])}</span>'
+                if open_ and it.args:
+                    parts.append(
+                        f'<div style="margin:8px 0 2px 0;font-size:12px;">{head}</div>'
+                        f'<div style="color:{C_TXT3};font-size:11px;margin:2px 0 6px 22px;'
+                        f'font-family:Consolas,monospace;line-height:1.5;">'
+                        f'{html.escape(it.args)}</div>'
+                    )
+                else:
+                    parts.append(
+                        f'<div style="margin:6px 0;font-size:12px;">{head}</div>'
+                    )
             elif it.kind == "ocr":
-                # 图片 + OCR 结果放在同一个块里：
-                # 上面是缩略图（确认发的是哪张），下面是可复制的识别原文
-                body = html.escape(it.text).replace(chr(10), "<br>")
-                head = (f'<span style="color:{C_ACCENT};font-size:11px;">'
-                        f'📎 {html.escape(it.tool)}</span>')
+                # 图片块：缩略图始终显示（确认发的是哪张），
+                # OCR 全文默认折叠 —— 用户要看的是回答，不是识别原文刷屏。
+                key = self._fold_key(it)
+                open_ = key in self._expanded
+                arrow = "▼" if open_ else "▶"
+                nchars = len(it.text or "")
                 img_html = ""
-                if getattr(it, "tool_uri", ""):
-                    img_html = (f'<div style="margin:8px 0 10px 0;">'
-                                f'<img src="{it.tool_uri}" style="border-radius:6px;">'
-                                f'</div>')
+                if it.tool_uri:
+                    tag = (f'<a href="zoom:{it.tool_img_id}" style="text-decoration:none;">'
+                           f'<img src="{it.tool_uri}" style="border-radius:6px;"></a>')
+                    img_html = f'<div style="margin:8px 0 8px 0;">{tag}</div>'
+                link = (f'<a href="fold:{key}" style="text-decoration:none;color:{C_ACCENT};'
+                        f'font-size:11px;">{arrow} 📎 {html.escape(it.tool)}'
+                        f' <span style="color:{C_TXT3};">（OCR {nchars} 字，点开看全文）</span></a>')
+                body_html = ""
+                if open_:
+                    body_html = (
+                        f'<div style="margin-top:8px;color:{C_TXT};'
+                        f'font-family:Consolas,monospace;font-size:12px;line-height:1.6;">'
+                        f'{html.escape(it.text).replace(chr(10), "<br>")}</div>')
                 parts.append(
                     f'<div style="margin:10px 0;padding:10px 12px;'
                     f'background:{C_CARD};border-left:3px solid {C_ACCENT};'
                     f'border-radius:4px;">'
-                    f'<div style="margin-bottom:4px;">{head}</div>'
-                    f'{img_html}'
-                    f'<div style="color:{C_TXT};font-family:Consolas,monospace;'
-                    f'font-size:12px;line-height:1.6;">{body}</div></div>'
+                    f'{img_html}{link}{body_html}</div>'
                 )
             elif it.kind == "reasoning":
-                parts.append(
-                    f'<div style="color:{C_TXT3};font-size:11px;margin:6px 0 6px 18px;'
-                    f'line-height:1.5;">{html.escape(it.text).replace(chr(10), "<br>")}</div>'
-                )
+                # 思考过程：默认折叠。9B 会用英文自言自语很长一段，
+                # 展开会把真正的回答挤到看不见的地方。
+                key = self._fold_key(it)
+                open_ = key in self._expanded
+                arrow = "▼" if open_ else "▶"
+                nchars = len(it.text or "")
+                if open_:
+                    parts.append(
+                        f'<div style="margin:6px 0 2px 18px;font-size:11px;">'
+                        f'<a href="fold:{key}" style="text-decoration:none;color:{C_TXT3};">'
+                        f'{arrow} 思考过程</a></div>'
+                        f'<div style="color:{C_TXT3};font-size:11px;margin:2px 0 6px 32px;'
+                        f'line-height:1.55;">'
+                        f'{html.escape(it.text).replace(chr(10), "<br>")}</div>'
+                    )
+                else:
+                    parts.append(
+                        f'<div style="margin:4px 0 4px 18px;font-size:11px;">'
+                        f'<a href="fold:{key}" style="text-decoration:none;color:{C_TXT3};">'
+                        f'{arrow} 思考过程 <span style="color:{C_TXT3};opacity:0.7;">'
+                        f'（{nchars} 字）</span></a></div>'
+                    )
             else:  # text
                 parts.append(
                     f'<div style="color:{C_TXT};margin:6px 0;line-height:1.7;">'
