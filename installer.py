@@ -63,6 +63,31 @@ def make_shortcut(lnk: Path, target: Path) -> bool:
         return False
 
 
+def write_uninstall_script() -> Path:
+    """写卸载脚本（打包成 exe 太麻烦，用 cmd 足够）。
+
+    必须和 write_uninstaller() 里注册表指向的**同一个文件名**。
+    之前这里是类方法，静默安装路径没调用它 → 注册表指向一个不存在的
+    卸载.cmd，「应用和功能」里点了没反应。
+    """
+    uninst = INSTALL_DIR / "卸载.cmd"
+    uninst.write_text(
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        f"echo 正在卸载 {APP_NAME}...\r\n"
+        f"taskkill /F /IM {APP_EXE} >nul 2>&1\r\n"
+        "timeout /t 1 >nul\r\n"
+        f'rd /s /q "{INSTALL_DIR}"\r\n'
+        f'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" /f >nul 2>&1\r\n'
+        f'del /q "%USERPROFILE%\\Desktop\\{APP_NAME}.lnk" >nul 2>&1\r\n'
+        f'del /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\{APP_NAME}.lnk" >nul 2>&1\r\n'
+        f"echo 已卸载。\r\n"
+        "pause\r\n",
+        encoding="utf-8",
+    )
+    return uninst
+
+
 def write_uninstaller() -> bool:
     """写注册表卸载项，让它在「应用和功能」里看得到。
 
@@ -184,23 +209,7 @@ class Installer:
             self._launch(target)
 
     def _write_uninstaller(self, app_exe: Path):
-        """写一个卸载脚本（打包成 exe 太麻烦，用 cmd + 快捷方式足够）。"""
-        uninst = INSTALL_DIR / "卸载.cmd"
-        uninst.write_text(
-            "@echo off\r\n"
-            "chcp 65001 >nul\r\n"
-            f"echo 正在卸载 {APP_NAME}...\r\n"
-            f"taskkill /F /IM {APP_EXE} >nul 2>&1\r\n"
-            "timeout /t 1 >nul\r\n"
-            f'rd /s /q "{INSTALL_DIR}"\r\n'
-            f'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" /f >nul 2>&1\r\n'
-            f'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" /f >nul 2>&1\r\n'
-            f'del /q "%USERPROFILE%\\Desktop\\{APP_NAME}.lnk" >nul 2>&1\r\n'
-            f'del /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\{APP_NAME}.lnk" >nul 2>&1\r\n'
-            f"echo 已卸载。\r\n"
-            "pause\r\n",
-            encoding="utf-8",
-        )
+        write_uninstall_script()
 
     def _launch(self, target: Path):
         try:
@@ -233,6 +242,10 @@ def silent_install() -> int:
             print("已复制 AGENTS.md")
 
         (INSTALL_DIR / "logs").mkdir(exist_ok=True)
+
+        # 卸载脚本必须真的写出来，否则注册表那一条点了没反应
+        uninst = write_uninstall_script()
+        print(f"卸载脚本: [OK] {uninst.name}")
 
         desktop = Path(os.environ["USERPROFILE"]) / "Desktop"
         ok_d = make_shortcut(desktop / f"{APP_NAME}.lnk", target)
