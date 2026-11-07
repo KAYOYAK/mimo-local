@@ -29,12 +29,27 @@ from core import engine as eng
 
 
 def ensure_ocr_engine() -> None:
-    """确保 OCR 引擎在跑。"""
+    """确保 OCR 引擎在跑。
+
+    ⚠ 这个函数起的引擎**不属于 UI 的 Engine 实例**，UI 退出时不会自动关它。
+    所以这里把 pid 写进 logs/ocr.pid —— 主程序启动和退出时按 pid 收尸。
+    不写 pid 的后果实测过：关掉程序后 1.3 GB 显存不释放，下次启动撞端口占用。
+    """
     if eng.health_ok(config.OCR_PORT):
         return
+
     e = eng.make_ocr_engine()
     e.start()
-    # 起完就不管了 —— 进程独立，后续调用直接连端口
+
+    # 引擎对象 e 在这里就离开作用域了（Popen 句柄和日志句柄一起丢），
+    # 所以必须立刻把 pid 落盘，否则这个进程再也没有人认领。
+    pid = None
+    try:
+        pid = e.proc.pid if e.proc else None
+    except Exception:
+        pass
+    if pid:
+        eng.write_pid(config.OCR_PID_FILE, pid)
 
 
 def main() -> int:

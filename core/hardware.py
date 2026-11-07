@@ -134,22 +134,28 @@ def plan_chat() -> ChatPlan:
     model_gb = model_size_gb(config.CHAT_MODEL)
 
     # ---- 上下文长度 ----
+    ctx_max = getattr(config, "CHAT_CTX_MAX", 65536)
     if config.CHAT_CTX > 0:
-        ctx = config.CHAT_CTX
+        # 显式配置（调试用）。仍然受上限约束，免得手滑写成 200K 直接 OOM。
+        ctx = min(config.CHAT_CTX, ctx_max)
         notes.append(f"上下文 {ctx}（配置指定）")
-    elif vram >= 15:
-        ctx = 65536
-    elif vram >= 11:
-        ctx = 32768
-    elif vram >= 8:
-        ctx = 16384
-    elif vram >= 6:
-        ctx = 8192
-    elif vram > 0:
-        ctx = 4096
     else:
-        ctx = 8192
-        notes.append("读不到显存大小，按保守值起步")
+        # 按显存推导。10 GB 这条线来自实测：
+        # 11.9 GB 显存跑 64K + q8_0 + flash-attn 实测占 9880 MiB，余量够。
+        if vram >= 10:
+            ctx = 65536
+        elif vram >= 8:
+            ctx = 32768
+        elif vram >= 6:
+            ctx = 16384
+        elif vram > 0:
+            ctx = 8192
+        else:
+            ctx = 8192
+            notes.append("读不到显存大小，按保守值起步")
+        ctx = min(ctx, ctx_max)
+        if vram > 0:
+            notes.append(f"上下文 {ctx}（按显存 {vram} GB 自动，上限 {ctx_max}）")
 
     # ---- KV 缓存精度 ----
     if config.CHAT_KV:

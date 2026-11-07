@@ -196,6 +196,57 @@ def health_ok(port: int) -> bool:
         return False
 
 
+# ---------- 外部起的引擎（OCR 工具）的 pid 收尸 ----------
+#
+# 为什么需要这个：
+#   tools/ocr.py 由模型通过 bash 调用，它自己起的 OCR 引擎**不属于 UI 的
+#   任何一个 Engine 实例**——UI 退出时不会关它。实测后果：关掉程序后
+#   1.3 GB 显存不释放，下次启动撞 8090 端口占用，报「上次异常退出留了残留」。
+#   （这正是本文件顶部注释里那句「退出时必须 kill」被绕开的地方。）
+#
+# 做法：ocr.py 起引擎后把 pid 写进 logs/ocr.pid；程序启动/退出时按 pid 收尸。
+
+def write_pid(pid_file: Path, pid: int) -> None:
+    try:
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(str(pid), encoding="ascii")
+    except Exception:
+        pass
+
+
+def read_pid(pid_file: Path) -> int | None:
+    try:
+        if not pid_file.is_file():
+            return None
+        txt = pid_file.read_text(encoding="ascii").strip()
+        return int(txt) if txt.isdigit() else None
+    except Exception:
+        return None
+
+
+def kill_pid(pid_file: Path) -> bool:
+    """按 pid 文件杀进程，然后删掉 pid 文件。返回是否真的杀了。"""
+    pid = read_pid(pid_file)
+    killed = False
+    if pid:
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True, timeout=10, **_no_window_kwargs(),
+                )
+            else:
+                os.kill(pid, 15)
+            killed = True
+        except Exception:
+            pass
+    try:
+        pid_file.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return killed
+
+
 # ---------- 两个引擎的工厂 ----------
 
 def make_chat_engine(log_dir: Path | None = None) -> Engine:
@@ -213,7 +264,7 @@ def make_chat_engine(log_dir: Path | None = None) -> Engine:
     threads = config.CHAT_THREADS or hardware.get_cpu_cores()
 
     args = [
-        "-m", str(config.CHAT_MODEL),
+        "-m", str(config.current_model()),
         "--host", "127.0.0.1",
         "--port", str(config.CHAT_PORT),
         "--ctx-size", str(plan.ctx),
@@ -243,8 +294,8 @@ def make_chat_engine(log_dir: Path | None = None) -> Engine:
 
     # 有投影文件就开视觉能力，没有就显式关掉
     # （引擎在"没给投影文件"时会自己去网上下载，必须堵住）
-    if config.CHAT_MMPROJ.exists():
-        args += ["--mmproj", str(config.CHAT_MMPROJ)]
+    if config.current_mmproj().exists():
+        args += ["--mmproj", str(config.current_mmproj())]
     else:
         args += ["--no-mmproj"]
 

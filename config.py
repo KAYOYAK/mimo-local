@@ -59,16 +59,32 @@ OCR_MMPROJ = OCR_DIR / "mmproj-Xiaomi-OCR-0-F16.gguf"
 MIMO_EXE = ASSETS / "mimo.exe"
 MIMO_AGENT_DIR = ROOT / "agent"          # XDG 四路径的落点
 
+# ---------- 版本 ----------
+# 单一来源。About、诊断报告、安装器都从这里取，别在各处再写一份。
+VERSION = "1.0.1"
+
+# ---------- 运行期设置 ----------
+# 当前模型、端口等可变状态存在这里，**不写回本文件**。
+# 打包成 exe 后 config.py 还在，但改它是错的：中途被杀会留半截源码。
+SETTINGS_FILE = ROOT / "settings.json"
+
+# OCR 引擎的 pid 文件。tools/ocr.py 起的引擎不属于 UI 管，靠这个收尸。
+OCR_PID_FILE = LOGS / "ocr.pid"
+
 # ---------- 端口 ----------
 CHAT_PORT = 8080        # 聊天引擎
-OCR_PORT = 8090         # 文档识别引擎（独立，用完即关）
+OCR_PORT = 8090         # 文档识别引擎（和聊天引擎一起常驻）
 AGENT_PORT = 4096       # mimo serve（agent 后端）
 
 # ---------- 聊天引擎参数 ----------
 # 上下文：AI 编程需要 64K。32K 下 MiMo Code 的系统提示 + 工具定义吃掉 27K，
-# 跑两三轮就超限（实测 277 秒后失败）。显存只多 167 MiB，没理由省。
-# 设 0 = 按显存自动推导（core/hardware.py）。
-CHAT_CTX = 65536
+# 跑两三轮就超限（实测 277 秒后失败）。
+#
+# 设 0 = **按显存自动推导**（core/hardware.py），上限 CHAT_CTX_MAX。
+# 别在这里写死 65536 —— 那样自动降级分支永远不会执行，6 GB 的卡也会照样要 64K，
+# 然后启动即 OOM。
+CHAT_CTX = 0
+CHAT_CTX_MAX = 65536
 
 # KV 缓存精度。空 = 按显存自动（>= 9 GB 用 q8_0，否则 q4_0）。
 # 只压缓存精度，不动模型权重 —— 这是 U 盘版实测省下 716 MiB 的做法。
@@ -128,3 +144,48 @@ def check_paths() -> list[str]:
     if not MIMO_EXE.exists():
         missing.append(f"AI 编程：{MIMO_EXE}")
     return missing
+
+
+# ---------- 运行期可变状态（从 settings.json 读）----------
+#
+# 为什么不在切换模型时改写本文件：
+#   1. 打包成 exe 后 config.py 在压缩包里，磁盘上没有这个文件 → 必然失败
+#   2. 即使源码运行，读到一半被杀会留下半截 Python 文件 → 程序再也起不来
+#      （报错还是 ModuleNotFoundError 这种看不出根因的）
+# 所以运行期状态一律写 settings.json，本文件只当默认值。
+
+def _settings() -> dict:
+    try:
+        import json
+        if SETTINGS_FILE.is_file():
+            obj = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def current_model() -> Path:
+    """当前模型。settings.json 里选过的优先，否则用 CHAT_MODEL 默认值。"""
+    p = _settings().get("chat_model")
+    if p:
+        try:
+            cand = Path(p)
+            if cand.is_file():
+                return cand
+        except Exception:
+            pass
+    return CHAT_MODEL
+
+
+def current_mmproj() -> Path:
+    """当前模型配套的投影文件。"""
+    p = _settings().get("chat_mmproj")
+    if p:
+        try:
+            cand = Path(p)
+            if cand.is_file():
+                return cand
+        except Exception:
+            pass
+    return CHAT_MMPROJ

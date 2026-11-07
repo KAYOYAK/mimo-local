@@ -1,0 +1,37 @@
+v1.0.1: 修复 review 提出的 7 个 P0 问题
+
+#1 OCR 引擎孤儿进程
+   tools/ocr.py 自己起的引擎不属于 UI 的 Engine 实例，关掉程序后显存不释放、
+   下次启动撞端口占用。改：起引擎后写 logs/ocr.pid，主程序启动/退出按 pid 收尸。
+   （core/engine.py 新增 write_pid / read_pid / kill_pid）
+
+#2 卸载器在「应用和功能」里点了没反应
+   注册表指向 卸载.exe，实际写出的是 卸载.cmd，两个地方写了不同的文件名。
+   改：统一用 .cmd，UninstallString 用 cmd /c 包一层，去掉重复的 reg delete。
+
+#3 换模型在打包后的 exe 里必然失败
+   旧实现正则替换 config.py —— 打包后那个文件在压缩包里，磁盘上没有；
+   源码模式中途被杀还会留下半截文件。改：写 settings.json，
+   config.current_model() / current_mmproj() 启动时读它。
+
+#4 CHAT_CTX = 65536 让自动降级变成死代码
+   plan_chat() 第一句就是 if config.CHAT_CTX > 0，永远走「配置指定」分支，
+   按显存推导的那整段从未执行过。改：CHAT_CTX = 0 + CHAT_CTX_MAX 上限，
+   按显存推导（10 GB 以上给 64K）。
+
+#5 web/webfetch 与「不联网」声明矛盾
+   程序自己确实不联网，但被驱动的 agent 原本被配置成可以联网、可以抓网页。
+   改：web 和 webfetch 都设为 deny。
+
+#6 一个回合无法中断
+   send() 里阻塞 900 秒且没有停止按钮，用户只能杀进程（而杀进程会留下孤儿 OCR）。
+   实测 POST /session/{id}/abort 返回 200（/cancel、/interrupt、/stop 都是 503）。
+   新增停止按钮。
+
+#7 config.py 被非原子重写
+   随 #3 一起解决：运行期状态改到 settings.json，
+   写入走临时文件 + fsync + os.replace。
+
+顺带：
+- config.VERSION 单一来源（About/报告都从这里取）
+- 显存规则按实测更新（11.9 GB 跑 64K 实测占 9880 MiB，10 GB 以上给 64K）

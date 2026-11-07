@@ -56,12 +56,12 @@ CONFIG_TEMPLATE = """{
     "bash": "allow",
     "edit": "allow",
     "read": "allow",
-    "web": "allow",
     "list": "allow",
     "glob": "allow",
     "grep": "allow",
-    "webfetch": "allow",
     "external_directory": "allow",
+    "web": "deny",
+    "webfetch": "deny",
     "question": "deny"
   },
   "provider": {
@@ -371,6 +371,20 @@ def get_messages(server: AgentServer, session_id: str) -> list:
 def send_message(server: AgentServer, session_id: str, text: str, timeout: float = 900) -> dict:
     body = {"parts": [{"type": "text", "text": text}]}
     return server.api("POST", f"/session/{session_id}/message", body, timeout=timeout)
+
+
+def abort_session(server: AgentServer, session_id: str) -> bool:
+    """中断当前回合。
+
+    实测 `POST /session/{id}/abort` 返回 200（`/cancel`、`/interrupt`、
+    `/stop` 都是 503，只有 abort 是真的）。
+    9B 模型一个任务经常调十几次工具、跑几十秒，没有中断手段很难用。
+    """
+    try:
+        server.api("POST", f"/session/{session_id}/abort", {}, timeout=10)
+        return True
+    except Exception:
+        return False
 
 
 # ---------- 消息解析 ----------

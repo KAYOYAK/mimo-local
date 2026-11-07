@@ -68,18 +68,22 @@ def current_model() -> Path:
 
 
 def set_model(model: Path) -> None:
-    """改 config.py 里的 CHAT_MODEL / CHAT_MMPROJ 路径。"""
-    cfg = config.ROOT / "config.py"
-    text = cfg.read_text(encoding="utf-8")
+    """切换当前模型。
+
+    **不改源码**（旧实现是正则替换 config.py，打包成 exe 后必然失败，
+    而且源码模式中途被杀会留半截文件）。改的是 settings.json，
+    config.current_model() 启动时读它。
+    """
+    from core.settings import Settings
 
     mm = find_mmproj(model)
-    model_line = f'CHAT_MODEL = MODEL_DIR / "{model.name}"'
-    mm_line = (f'CHAT_MMPROJ = MODEL_DIR / "{mm.name}"' if mm
-               else 'CHAT_MMPROJ = MODEL_DIR / "___none___"')
-
-    text = re.sub(r'^CHAT_MODEL = .*$', model_line, text, flags=re.M)
-    text = re.sub(r'^CHAT_MMPROJ = .*$', mm_line, text, flags=re.M)
-    cfg.write_text(text, encoding="utf-8")
+    s = Settings(config.SETTINGS_FILE)
+    s.set("chat_model", str(model))
+    if mm:
+        s.set("chat_mmproj", str(mm))
+    else:
+        # 没有配套投影：把旧的清掉，否则会拿上一个模型的投影去配这个模型
+        s.delete("chat_mmproj")
 
 
 def main() -> int:

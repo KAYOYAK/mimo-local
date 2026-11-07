@@ -170,6 +170,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # 清理上次异常退出留下的 OCR 引擎（ocr.py 起的那个，没人认领）
+        try:
+            from core import engine as _eng
+            if _eng.kill_pid(config.OCR_PID_FILE):
+                pass    # 静默清理，不打扰用户
+        except Exception:
+            pass
+
         self._build()
 
         # 重绘节流：80ms 一次。不节流的话每个 token 都重排，界面直接卡死
@@ -300,6 +308,20 @@ class MainWindow(QMainWindow):
         self.btn_send.setFixedWidth(88)
         self.btn_send.clicked.connect(self.send)
         cl.addWidget(self.btn_send)
+
+        # 停止按钮：平时隐藏，忙的时候出现，盖在发送按钮右边
+        self.btn_stop = QPushButton("停止")
+        self.btn_stop.setFixedHeight(84)
+        self.btn_stop.setFixedWidth(72)
+        self.btn_stop.setVisible(False)
+        self.btn_stop.setStyleSheet(
+            f"QPushButton {{ background: {C_CARD}; color: {C_ERR};"
+            f" border: 1px solid {C_ERR}; border-radius: 8px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #3a2320; }}"
+            f"QPushButton:disabled {{ color: {C_TXT3}; border-color: {C_LINE}; }}"
+        )
+        self.btn_stop.clicked.connect(self.stop_round)
+        cl.addWidget(self.btn_stop)
 
         outer.addWidget(comp)
 
@@ -543,6 +565,30 @@ class MainWindow(QMainWindow):
         self.busy = busy
         self.btn_send.setEnabled(not busy)
         self.btn_send.setText("思考中" if busy else "发送")
+        # 忙的时候把「发送」变成「停止」——9B 一个任务常跑几十秒、调十几次工具，
+        # 没有中断手段就是在逼用户杀进程（而杀进程会留下孤儿 OCR 引擎）
+        if busy:
+            self.btn_stop.setVisible(True)
+            self.btn_stop.setEnabled(True)
+        else:
+            self.btn_stop.setVisible(False)
+
+    def stop_round(self):
+        """中断当前回合。"""
+        if not self.busy or not self.session_id or not self.agent:
+            return
+        self.btn_stop.setEnabled(False)
+        self.bridge.status.emit("正在中断…", "busy")
+
+        def work():
+            try:
+                ok = ag.abort_session(self.agent, self.session_id)
+                self._add_system_text("⏹ 已中断本轮。" if ok else "中断失败（可能这一轮已经结束了）。")
+                self._dirty = True
+            finally:
+                self.bridge.status.emit("就绪", "ok")
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ================= 事件（后台线程 → 桥 → 这里）=================
 
@@ -700,12 +746,17 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                if self.agent:
-                    self.agent.stop()
-                    self.agent = None
-                if self.chat_engine:
-                    self.chat_engine.stop()
-                    self.chat_engine = None
+                for obj in (self.agent, self.chat_engine, self.ocr_engine):
+                    if obj:
+                        obj.stop()
+                self.agent = self.chat_engine = self.ocr_engine = None
+                self.ocr_live = False
+                # 兜底：ocr.py 可能自己起过引擎（模型调 OCR 时），按 pid 收尸
+                try:
+                    from core import engine as _eng
+                    _eng.kill_pid(config.OCR_PID_FILE)
+                except Exception:
+                    pass
                 self.bridge.status.emit("已停止", "dim")
                 self.btn_engine.setText("启动引擎")
                 self.ctx_label.setText("")
@@ -760,10 +811,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, ev):
         try:
-            if self.agent:
-                self.agent.stop()
-            if self.chat_engine:
-                self.chat_engine.stop()
+            for obj in (self.agent, self.chat_engine, self.ocr_engine):
+                if obj:
+                    obj.stop()
+            # 兜底：ocr.py 自己起的引擎不在上面三个里，按 pid 收尸
+            from core import engine as _eng
+            _eng.kill_pid(config.OCR_PID_FILE)
         except Exception:
             pass
         ev.accept()

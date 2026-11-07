@@ -64,9 +64,15 @@ def make_shortcut(lnk: Path, target: Path) -> bool:
 
 
 def write_uninstaller() -> bool:
-    """写注册表卸载项，让它在「应用和功能」里看得到。"""
+    """写注册表卸载项，让它在「应用和功能」里看得到。
+
+    注意 UninstallString 必须指向**真实存在**的文件，而且 .cmd 要用
+    `cmd /c` 包一层，否则在「应用和功能」里点了没反应。
+    """
     try:
         import winreg
+        # 实际写出的是 .cmd，注册表也必须指它
+        uninst = INSTALL_DIR / "卸载.cmd"
         key_path = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as k:
             winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
@@ -76,8 +82,8 @@ def write_uninstaller() -> bool:
             winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "KAYOYAK")
             winreg.SetValueEx(k, "NoModify", 0, winreg.REG_DWORD, 1)
             winreg.SetValueEx(k, "NoRepair", 0, winreg.REG_DWORD, 1)
-            uninst = INSTALL_DIR / "卸载.exe"
-            winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ, str(uninst))
+            winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ,
+                              f'cmd /c "{uninst}"')
         return True
     except Exception:
         return False
