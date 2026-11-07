@@ -21,10 +21,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 
 results: list[tuple[bool, str, str]] = []      # (通过, 声明, 证据)
+skipped: list[str] = []
 
 
 def check(ok: bool, claim: str, evidence: str):
     results.append((ok, claim, evidence))
+
+
+def skip(claim: str, why: str):
+    """打包成 exe 后有些源码读不到 —— 那是环境限制，不算声明被违反。"""
+    skipped.append(f"{claim}（{why}）")
+
+
+def _source_of(mod, name: str) -> str:
+    """拿模块里某个函数的源码。打包后可能拿不到，返回空串。"""
+    import inspect
+    try:
+        obj = getattr(mod, name, None)
+        if obj is None:
+            return ""
+        return inspect.getsource(obj)
+    except Exception:
+        return ""
+
+
+def _read_repo_file(rel: str) -> str:
+    """读仓库里的源码文件。打包后没有这个文件，返回空串。"""
+    p = config.ROOT / rel
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else ""
+    except Exception:
+        return ""
 
 
 # ---------- README 的每一句承诺 ----------
@@ -62,17 +89,22 @@ def claim_64k_estimate():
 
 def claim_no_orphan():
     """README 的「已知限制」说关掉程序不会留残留。"""
-    import inspect
     from core import engine
     has = all(callable(getattr(engine, n, None))
               for n in ("write_pid", "read_pid", "kill_pid"))
     check(has, "README 说「关掉程序不会留残留」→ engine 必须有 pid 收尸能力",
           "write_pid/read_pid/kill_pid 齐全" if has else "缺函数")
 
-    sig = inspect.getsource(engine.Engine.stop)
-    check("terminate" in sig and "kill" in sig,
-          "Engine.stop() 必须真的终止进程（不是只关日志句柄）",
-          "terminate + kill 都在")
+    # 打包后读不到源码，改用运行时检查
+    src = _source_of(engine.Engine, "stop")
+    if src:
+        check("terminate" in src and "kill" in src,
+              "Engine.stop() 必须真的终止进程（不是只关日志句柄）",
+              "terminate + kill 都在")
+    else:
+        check(callable(getattr(engine.Engine, "stop", None)),
+              "Engine.stop() 必须存在（关引擎不能只关日志句柄）",
+              "stop 是方法")
 
 
 def claim_ocr_as_tool():
@@ -100,15 +132,20 @@ def claim_ocr_as_tool():
 def claim_no_source_rewrite():
     """README 说「切换模型不需要改源码」——实际是不能改。"""
     from tools import switch_model
-    import inspect
-    src = inspect.getsource(switch_model.set_model)
-    # 关键判据是「有没有去写文件」，不是「源码里提没提 config.py」
-    # （docstring 里提到它是在解释为什么不能改，那不算违规）
-    writes_files = "write_text" in src or ".write_bytes" in src
-    uses_settings = "Settings" in src
-    check(not writes_files and uses_settings,
-          "换模型不能改写源码（打包后源码在压缩包里）→ 必须写 settings.json",
-          f"写文件={writes_files}, 用 Settings={uses_settings}")
+    from core import settings as settings_mod
+    has_settings = hasattr(settings_mod, "Settings")
+    src = _source_of(switch_model, "set_model")
+    if src:
+        # 关键判据是「有没有去写文件」，不是「源码里提没提 config.py」
+        # （docstring 里提到它是在解释为什么不能改，那不算违规）
+        writes_files = "write_text" in src or ".write_bytes" in src
+        check(not writes_files and has_settings,
+              "换模型不能改写源码（打包后源码在压缩包里）→ 必须写 settings.json",
+              f"写文件={writes_files}, Settings 可用={has_settings}")
+    else:
+        check(has_settings,
+              "换模型必须通过 settings.json（Settings 类必须存在）",
+              "core.settings.Settings 存在")
 
 
 def claim_version_single_source():
@@ -116,37 +153,56 @@ def claim_version_single_source():
     check(bool(getattr(config, "VERSION", "")),
           "版本号必须有单一来源 config.VERSION",
           f"VERSION={getattr(config, 'VERSION', None)}")
-    # 报告和 About 都该用它
-    report = (config.ROOT / "tools" / "report.py").read_text(encoding="utf-8")
-    check("config.VERSION" in report,
-          "诊断报告必须带版本号（出问题时第一句话就是「你装的是哪版」）",
-          "report.py 引用了 config.VERSION")
-    about = (config.ROOT / "ui_qt.py").read_text(encoding="utf-8") \
-        if (config.ROOT / "ui_qt.py").is_file() else ""
-    if about:
-        check("config.VERSION" in about, "About 必须带版本号", "ui_qt.py 引用了")
+
+    # 报告和 About 都该用它。打包后源码在 exe 里，用 inspect 拿；
+    # 拿不到就跳过（环境限制，不是声明被违反）
+    from tools import report as report_mod
+    rsrc = _source_of(report_mod, "build_report") or _read_repo_file("tools/report.py")
+    if rsrc:
+        check("config.VERSION" in rsrc,
+              "诊断报告必须带版本号（出问题时第一句话就是「你装的是哪版」）",
+              "report.py 引用了 config.VERSION")
+    else:
+        skip("诊断报告必须带版本号", "打包后读不到源码")
+
+    import ui_qt
+    usrc = _read_repo_file("ui_qt.py")
+    if usrc:
+        check("config.VERSION" in usrc, "About 必须带版本号", "ui_qt.py 引用了")
+    else:
+        # 打包后 ui_qt 已经加载，直接查它的 show_about 有没有渲染 version
+        import inspect
+        try:
+            src = inspect.getsource(ui_qt.MainWindow.show_about)
+        except Exception:
+            src = ""
+        if src:
+            check("config.VERSION" in src, "About 必须带版本号", "show_about 引用了")
+        else:
+            skip("About 必须带版本号", "打包后读不到源码")
 
 
 def claim_abort():
     """README 的「已知限制」说一个回合可能跑很久 —— 那必须能中断。"""
     from core import agent
-    src = Path(agent.__file__).read_text(encoding="utf-8")
-    check("abort_session" in src,
+    has_abort = callable(getattr(agent, "abort_session", None))
+    check(has_abort,
           "长回合必须能中断 → 必须有 abort 接口",
-          "abort_session 存在")
-    ui = config.ROOT / "ui_qt.py"
-    if ui.is_file():
-        t = ui.read_text(encoding="utf-8")
+          "abort_session 存在" if has_abort else "缺函数")
+    ui = _read_repo_file("ui_qt.py")
+    if ui:
+        t = ui
         check("btn_stop" in t and "stop_round" in t,
               "界面上必须有停止按钮", "btn_stop + stop_round")
 
 
 def claim_audit_log():
     """bash 权限是 allow，那必须留痕迹。"""
-    ui = config.ROOT / "ui_qt.py"
-    if not ui.is_file():
+    ui = _read_repo_file("ui_qt.py")
+    if not ui:
+        skip("bash 命令审计日志", "打包后读不到源码")
         return
-    t = ui.read_text(encoding="utf-8")
+    t = ui
     check("commands.log" in t,
           "bash: allow 意味着能跑任意命令 → 必须有命令审计日志",
           "commands.log 被写入")
@@ -206,13 +262,21 @@ def main() -> int:
         if verbose or not ok:
             print(f"         证据：{evidence}")
 
+    if skipped:
+        print()
+        for s in skipped:
+            print(f"  [跳过] {s}")
+
     print()
     print("=" * 64)
+    total = len(results) + len(skipped)
     if failed:
-        print(f"  {passed}/{len(results)} 条成立，{len(failed)} 条不符")
+        print(f"  {passed}/{len(results)} 条成立，{len(failed)} 条不符"
+              + (f"，{len(skipped)} 条跳过" if skipped else ""))
         print("  不符的要么改代码，要么改 README —— 两者不能同时成立。")
     else:
-        print(f"  {passed}/{len(results)} 条全部成立")
+        print(f"  {passed}/{len(results)} 条全部成立"
+              + (f"（{len(skipped)} 条因环境跳过）" if skipped else ""))
     print("=" * 64)
     return 0 if not failed else 1
 

@@ -87,6 +87,31 @@ def _run_cli(argv: list[str]) -> int | None:
             pass
         return code
 
+    if "--claims" in argv:
+        import io
+        import contextlib
+        buf = io.StringIO()
+        try:
+            from tools import claims as claims_mod
+            old = sys.argv
+            sys.argv = ["claims"]
+            try:
+                with contextlib.redirect_stdout(buf):
+                    code = claims_mod.main()
+            finally:
+                sys.argv = old
+        except Exception:
+            buf.write(traceback.format_exc())
+            code = 1
+        _safe_print(buf.getvalue())
+        try:
+            out = config.LOGS / "声明断言.txt"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(buf.getvalue(), encoding="utf-8")
+        except Exception:
+            pass
+        return code
+
     if "--selfcheck" in argv:
         import io
         import contextlib
