@@ -454,6 +454,56 @@ class MainWindow(QMainWindow):
                 out.append((img, "", str(e)))
         return out
 
+    def _build_payload(self, text: str, done: list, failed: list) -> str:
+        """把用户的问题 + 图片 OCR 结果拼成给模型的内容。
+
+        为什么结构要这么讲究（实测 9B 的行为）：
+          如果只是把「用户输入」和「OCR 文字」用换行连起来，模型会把它
+          当成「一段需要转述的材料」，输出「以下是图片内容：…」。
+          而用户真正要的是「把图里的信息当依据，回答我的问题」。
+
+        所以结构是：问题在前 → 证据在中（明确标成"图片内容"）→
+        要求在后（且明确说"不要照抄"）。
+        """
+        if not done and not failed:
+            return text
+
+        parts: list[str] = []
+
+        # 1. 用户的问题
+        if text:
+            parts.append(f"【用户的问题】\n{text}")
+        else:
+            parts.append("【用户的情况】\n只发了图片，没有写文字说明。")
+
+        # 2. 图片内容（作为证据，不是需要转述的材料）
+        for img, txt in done:
+            parts.append(
+                f"【用户发的图片：{img.name}】\n"
+                f"下面这张图片已经用本地 OCR 转成了文字（可能有少量识别误差，"
+                f"不影响理解）。这是**图片里的内容**，不是用户打的字：\n"
+                f"<<<\n{txt}\n>>>"
+            )
+        for img, err in failed:
+            parts.append(f"【用户发的图片：{img.name}】\n这张图 OCR 识别失败（{err}）。")
+
+        # 3. 明确要求 —— 放在最后，因为模型对最后一句最敏感
+        if text:
+            parts.append(
+                "请**直接回答用户的问题**。上面的图片文字是事实依据："
+                "需要引用时引用具体的条目/数字，但不要整段照抄，"
+                "也不要只说「图片内容是…」。"
+                "如果图片里的信息不足以回答，明确说缺什么。"
+            )
+        else:
+            parts.append(
+                "用户没写问题。请先看懂图片内容，再用中文说明："
+                "这是什么、关键信息有哪些、有没有值得注意的地方。"
+                "不要逐字复述，抓重点。"
+            )
+
+        return "\n\n".join(parts)
+
     # ================= 工具菜单 =================
 
     def _build_tools_menu(self):
@@ -1094,7 +1144,8 @@ class MainWindow(QMainWindow):
                 nonlocal sid, text
 
                 # ---------- 1. 有图就先跑 OCR，结果直接贴对话区 ----------
-                ocr_block = ""
+                ocr_done: list[tuple[Path, str]] = []      # 成功的
+                ocr_failed: list[tuple[Path, str]] = []    # 失败的
                 if images:
                     self.bridge.status.emit("识别图片", "busy")
                     results = self._run_ocr_for_images(images)
@@ -1105,15 +1156,16 @@ class MainWindow(QMainWindow):
                                 it.text = txt if txt else f"识别失败：{err}"
                                 break
                         if txt:
-                            ocr_block += f"\n\n[图片 {img.name} 的 OCR 结果]\n{txt}"
+                            ocr_done.append((img, txt))
                         else:
-                            ocr_block += f"\n\n[图片 {img.name} 识别失败：{err}]"
+                            ocr_failed.append((img, err))
                     self._dirty = True
 
-                # ---------- 2. 把 OCR 文字拼进发给模型的内容 ----------
-                payload = text or "看看这些图片的内容，用中文说明。"
-                if ocr_block:
-                    payload = payload + ocr_block
+                # ---------- 2. 拼成模型能「当信息用」的内容 ----------
+                # 关键：不能让模型以为那是用户打的字，也不能暗示它「转述一下」。
+                # 实测 9B 会照着最后一个指令做 —— 所以结构必须是
+                # 「问题在前、证据在中、明确要求在后」。
+                payload = self._build_payload(text, ocr_done, ocr_failed)
 
                 # 关键：payload 也要记进 echo。
                 # 模型会把收到的 user message 回显到事件流里，而界面显示的
