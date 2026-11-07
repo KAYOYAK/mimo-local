@@ -340,6 +340,13 @@ class AgentServer:
             stderr=self._log,
             **_no_window(),
         )
+        # 写 pid：程序异常退出时 mimo serve 不会跟着退，会一直占着端口，
+        # 下次启动就撞「端口 4096 已被占用」。有 pid 才能收尸。
+        try:
+            from core.engine import write_pid
+            write_pid(config.AGENT_PID_FILE, self.proc.pid)
+        except Exception:
+            pass
 
         deadline = time.time() + 90
         while time.time() < deadline:
@@ -386,6 +393,11 @@ class AgentServer:
             except Exception:
                 pass
             self._log = None
+        # 正常退出清掉 pid，避免下次启动误杀同号进程
+        try:
+            config.AGENT_PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # ---------- HTTP ----------
 

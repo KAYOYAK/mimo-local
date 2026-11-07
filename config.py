@@ -61,7 +61,7 @@ MIMO_AGENT_DIR = ROOT / "agent"          # XDG 四路径的落点
 
 # ---------- 版本 ----------
 # 单一来源。About、诊断报告、安装器都从这里取，别在各处再写一份。
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 
 # ---------- 运行期设置 ----------
 # 当前模型、端口等可变状态存在这里，**不写回本文件**。
@@ -73,6 +73,10 @@ SESSION_IMAGES_FILE = ROOT / "agent" / "session-images.json"
 
 # OCR 引擎的 pid 文件。tools/ocr.py 起的引擎不属于 UI 管，靠这个收尸。
 OCR_PID_FILE = LOGS / "ocr.pid"
+# 三个子进程都要有 pid 文件 —— 程序异常退出（崩溃、被强杀、Blue Screen）时
+# 它们不会跟着退出，下次启动就会撞端口。有 pid 才能在下一次启动时收尸。
+CHAT_PID_FILE = LOGS / "chat.pid"
+AGENT_PID_FILE = LOGS / "agent.pid"
 
 # ---------- 端口 ----------
 CHAT_PORT = 8080        # 聊天引擎

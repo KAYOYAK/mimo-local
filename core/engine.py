@@ -29,6 +29,7 @@ class EngineSpec:
     port: int
     args: list[str] = field(default_factory=list)
     log_path: Path | None = None
+    pid_file: Path | None = None
 
 
 def _no_window_kwargs() -> dict:
@@ -102,6 +103,12 @@ class Engine:
             cwd=str(spec.exe.parent),
             **_no_window_kwargs(),
         )
+        # 写 pid 文件：程序异常退出（崩溃/被强杀）时子进程不会跟着退，
+        # 下次启动靠这个 pid 收尸，否则会撞端口。
+        try:
+            write_pid(spec.pid_file, self.proc.pid)
+        except Exception:
+            pass
 
         # 轮询 /health。模型加载要几十秒，期间引擎不打日志也没响应。
         deadline = time.time() + 180
@@ -152,6 +159,12 @@ class Engine:
             except Exception:
                 pass
             self._log_fh = None
+        # 正常退出就清掉 pid 文件，免得下次启动误杀同号的无关进程
+        if self.spec.pid_file is not None:
+            try:
+                self.spec.pid_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # ---------- 调试 ----------
 
@@ -256,7 +269,11 @@ def _pid_is_llama(pid: int) -> bool:
     try:
         r = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
+            # ⚠ 不能用 text=True：中文 Windows 上 tasklist 输出是 GBK
+            # （实测报 UnicodeDecodeError: 0xd0），解码失败会让整个校验
+            # 静默返回 False —— 收尸功能等于没写。
+            encoding="mbcs", errors="replace",
             **_no_window_kwargs(),
         )
         out = (r.stdout or "").lower()
@@ -345,7 +362,7 @@ def make_chat_engine(log_dir: Path | None = None) -> Engine:
         args += ["--no-mmproj"]
 
     log = (log_dir or config.LOGS) / "engine-chat.log"
-    return Engine(EngineSpec("chat", config.ENGINE, config.CHAT_PORT, args, log))
+    return Engine(EngineSpec("chat", config.ENGINE, config.CHAT_PORT, args, log, config.CHAT_PID_FILE))
 
 
 def make_ocr_engine(log_dir: Path | None = None) -> Engine:
@@ -363,4 +380,4 @@ def make_ocr_engine(log_dir: Path | None = None) -> Engine:
         "--top-k", "1",
     ]
     log = (log_dir or config.LOGS) / "engine-ocr.log"
-    return Engine(EngineSpec("ocr", config.ENGINE, config.OCR_PORT, args, log))
+    return Engine(EngineSpec("ocr", config.ENGINE, config.OCR_PORT, args, log, config.OCR_PID_FILE))

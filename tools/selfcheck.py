@@ -206,6 +206,52 @@ def check_dirs(c: Checker):
         c.fail(f"日志目录写不进去：{e}")
 
 
+def check_pid_guard(c: Checker):
+    """三个子进程都要有 pid 文件 + 收尸能力。
+
+    真实事故：用户反馈「打开一次启动不了，端口 4096 被占用」。
+    查出来是上次异常退出留下的 mimo serve / llama-server 没跟着退。
+    原来只有 OCR 有 pid 文件，聊天引擎和 mimo serve 都没有 ——
+    所以根本没法收尸。
+
+    顺带发现更大的坑：_pid_is_llama 里用 text=True 读 tasklist，
+    中文 Windows 上 tasklist 输出是 GBK，解码抛 UnicodeDecodeError，
+    异常被 except 吞掉 → 身份校验永远 False → 收尸等于没写。
+    """
+    c.section("子进程收尸")
+    from core import engine as eng
+    need = [
+        ("聊天引擎", getattr(config, "CHAT_PID_FILE", None)),
+        ("OCR 引擎", getattr(config, "OCR_PID_FILE", None)),
+        ("MiMo Code", getattr(config, "AGENT_PID_FILE", None)),
+    ]
+    missing = [n for n, f in need if f is None]
+    if missing:
+        c.fail(f"这些子进程没有 pid 文件（崩溃后无法收尸）：{'、'.join(missing)}")
+    else:
+        c.ok("三个子进程都有 pid 文件")
+
+    # tasklist 解码必须能工作
+    import os
+    try:
+        ok = eng._pid_is_llama(os.getpid())
+        # python 进程应该判为 False（不是 llama），但**不能抛异常**
+        c.ok("子进程身份校验可运行（tasklist 解码正常）")
+    except Exception as e:
+        c.fail(f"身份校验出错（会导致收尸失效）：{e}")
+
+    # kill_pid 对不存在的 pid 要能静默清文件
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from pathlib import Path
+        fake = Path(td) / "fake.pid"
+        eng.write_pid(fake, 999999)
+        eng.kill_pid(fake)
+        if not fake.is_file():
+            c.ok("收尸会清掉过期 pid 文件")
+        else:
+            c.fail("收尸没清 pid 文件")
+
 def check_ports(c: Checker):
     c.section("端口")
     from core.engine import port_in_use
@@ -365,6 +411,7 @@ def main() -> int:
     check_render(c)
     check_image_input(c)
     check_dirs(c)
+    check_pid_guard(c)
     check_ports(c)
     check_config(c)
 

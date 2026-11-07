@@ -188,11 +188,16 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # 清理上次异常退出留下的 OCR 引擎（ocr.py 起的那个，没人认领）
+        # 清理上次异常退出留下的子进程。
+        # 崩溃/被强杀时 llama-server 和 mimo serve 不会跟着退出，
+        # 下次启动就撞「端口已被占用」。三个引擎都有 pid 文件，逐个收尸。
         try:
             from core import engine as _eng
-            if _eng.kill_pid(config.OCR_PID_FILE):
-                pass    # 静默清理，不打扰用户
+            for _pf in (config.CHAT_PID_FILE, config.OCR_PID_FILE, config.AGENT_PID_FILE):
+                try:
+                    _eng.kill_pid(_pf)     # 静默清理，不打扰用户
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1661,7 +1666,8 @@ class MainWindow(QMainWindow):
                 # 兜底：ocr.py 可能自己起过引擎（模型调 OCR 时），按 pid 收尸
                 try:
                     from core import engine as _eng
-                    _eng.kill_pid(config.OCR_PID_FILE)
+                    for _pf in (config.CHAT_PID_FILE, config.OCR_PID_FILE, config.AGENT_PID_FILE):
+                        _eng.kill_pid(_pf)
                 except Exception:
                     pass
                 self.bridge.status.emit("已停止", "dim")
@@ -1780,9 +1786,11 @@ class MainWindow(QMainWindow):
             for obj in (self.agent, self.chat_engine, self.ocr_engine):
                 if obj:
                     obj.stop()
-            # 兜底：ocr.py 自己起的引擎不在上面三个里，按 pid 收尸
+            # 兜底：ocr.py 自己起的引擎不在上面三个里，按 pid 收尸。
+            # 三个 pid 都试一遍 —— 任何一个残留都会让下次启动撞端口。
             from core import engine as _eng
-            _eng.kill_pid(config.OCR_PID_FILE)
+            for _pf in (config.CHAT_PID_FILE, config.OCR_PID_FILE, config.AGENT_PID_FILE):
+                _eng.kill_pid(_pf)
         except Exception:
             pass
         ev.accept()
