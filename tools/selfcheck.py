@@ -376,6 +376,19 @@ def check_render(c: Checker):
     except Exception as e:
         c.warn(f"payload 判据检查失败：{e}")
 
+    # echo 不能误吞回答（真实事故：新对话第一句的回答完全不显示）
+    e = {"你好": 1}
+    d_user, _ = decide({"type": "text", "text": "你好"}, e)
+    d_ans, _ = decide({"type": "text", "text": "你好！有什么可以帮你的？"}, {})
+    if d_user is None:
+        c.ok("用户消息的 echo 会被吞掉（不重复显示）")
+    else:
+        c.fail("用户消息的 echo 没被吞")
+    if d_ans is not None:
+        c.ok("模型回答以「你好」开头时不会被误吞")
+    else:
+        c.fail("模型回答被 echo 误吞了！—— 这正是「第一句回答不显示」的原因")
+
     # echo 语义：发过一次就只吞一次
     e = {"继续": 1}
     d1, _ = decide({"type": "text", "text": "继续"}, e)

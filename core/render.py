@@ -75,15 +75,25 @@ def decide(part: dict[str, Any], echoes: dict[str, int]) -> tuple[Step | None, s
         if not txt:
             return None, "空文本"
         # 用户消息的 echo —— 我们已经自己显示过一遍了。
-        # 用**前缀匹配**而不是相等：带图片时发给模型的 payload 是
-        # 「用户输入 + OCR 全文」，而界面只显示「（看图）」或用户输入，
-        # 两者不完全相等。不这么比的话 OCR 结果会在对话里出现两次。
+        #
+        # ⚠ 这里的匹配范围必须严格：
+        #   精确相等                      → 是用户消息的 echo，吞掉
+        #   key 是「完整 payload」时      → 允许包含匹配（带图片时 payload
+        #     比界面显示的「（看图）」长，事件里回显的是完整 payload）
+        #
+        # 绝不能无条件用 txt.startswith(key)：
+        #   用户说「你好」、模型回答「你好！有什么可以帮你」→ 回答会被吞掉。
+        #   这是真实事故：新对话第一句的回答完全不显示。
         for key, n in list(echoes.items()):
             if n <= 0 or not key:
                 continue
-            if txt == key or txt.startswith(key) or key.startswith(txt):
+            if txt == key:
                 echoes[key] -= 1
                 return None, "echo（用户已显示）"
+            if ("【用户的问题】" in key) or ("【用户发的图片：" in key):
+                if txt.startswith(key) or key.startswith(txt):
+                    echoes[key] -= 1
+                    return None, "echo（用户已显示）"
         # 模型把 payload 复述了一遍 —— 不是回答
         if looks_like_payload(txt):
             return None, "复述了发给模型的 payload（不是回答）"

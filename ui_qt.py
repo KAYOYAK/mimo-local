@@ -1894,9 +1894,13 @@ class MainWindow(QMainWindow):
                 # 模型会把收到的 user message 回显到事件流里，而界面显示的
                 # 只是「（看图）」—— 不记 payload 的话，它会以正文的样式
                 # 再渲染一遍，用户会看到 OCR 结果重复两次。
-                _pk = payload.strip()
-                if _pk:
-                    self._echoes[_pk] = self._echoes.get(_pk, 0) + 1
+                # 只有带图片时 payload 才和界面显示的文本不同（多了 OCR 全文）。
+                # 没图片时 payload == 用户原话，上面已经记过一次了 ——
+                # 再记一次会让计数变成 2，回答开头相同就会被连吞两次。
+                if images:
+                    _pk = payload.strip()
+                    if _pk:
+                        self._echoes[_pk] = self._echoes.get(_pk, 0) + 1
 
                 if not sid:
                     sid = ag.create_session(self.agent, self.workdir)
