@@ -169,6 +169,8 @@ class MainWindow(QMainWindow):
         self._seen: set[str] = set()
         self._pending_images: list[Path] = []   # 待发送的图片
         self._img_uris: dict[str, bool] = {}     # 已注册进 QTextDocument 的图片
+        self._session_images: dict = {}          # 会话 → 发过的图片路径
+        self._session_images = self._load_session_images()
         self._expanded: set[str] = set()         # 用户手动展开的折叠块
         self._img_paths: dict[str, Path] = {}    # img_id → 原始路径（放大用）
 
@@ -811,6 +813,43 @@ class MainWindow(QMainWindow):
         # 没有 id 的（系统消息等）用内存地址 —— 同一次会话里稳定
         return f"{it.kind}-{id(it)}"
 
+    # ================= 会话图片记录 =================
+    # MiMo Code 的历史里只存 OCR 文本，不存图片路径。
+    # 所以本地记一份 session → [图片路径]，切换对话时才能把缩略图恢复出来。
+
+    def _load_session_images(self) -> dict:
+        try:
+            import json as _json
+            if config.SESSION_IMAGES_FILE.is_file():
+                return _json.loads(config.SESSION_IMAGES_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _save_session_images(self):
+        try:
+            import json as _json
+            config.SESSION_IMAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = config.SESSION_IMAGES_FILE.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(self._session_images, ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            import os
+            os.replace(tmp, config.SESSION_IMAGES_FILE)
+        except Exception:
+            pass
+
+    def _remember_images(self, sid: str, images: list):
+        """记住这个会话发过哪些图（追加，去重）。"""
+        if not sid or not images:
+            return
+        cur = self._session_images.get(sid) or []
+        for p in images:
+            s = str(p)
+            if s not in cur:
+                cur.append(s)
+        self._session_images[sid] = cur
+        self._save_session_images()
+
     # ================= 会话（历史对话）=================
 
     def refresh_sessions(self):
@@ -898,6 +937,16 @@ class MainWindow(QMainWindow):
 
         msgs = payload.get("messages") or []
         n_user = n_ai = 0
+
+        # 这个会话发过的图片（本地记录的，历史里没有）
+        saved_imgs = self._session_images.get(self.session_id or "") or []
+        img_idx = 0
+
+        # 模型有时会把收到的 payload 原样复述一遍当成自己的回答，
+        # 那些文本长这样，不是真的回答，不能显示：
+        PAYLOAD_MARKS = ("【用户的问题】", "【用户发的图片：", "【用户的情况】",
+                         "你无法直接查看图片本身", "这是**图片里的内容**")
+
         for m in msgs:
             info = m.get("info") or {}
             role = info.get("role")
@@ -913,6 +962,7 @@ class MainWindow(QMainWindow):
                         continue
                     # 历史里的 user 消息是我们拼的 payload —— 只显示用户那一句，
                     # 不要把 OCR 全文和【用户的问题】结构再翻出来
+                    had_image = "【用户发的图片：" in txt
                     if "【用户的问题】" in txt:
                         seg = txt.split("【用户的问题】", 1)[1]
                         for cut in ("【用户发的图片：", "请**直接回答", "⚠ 你无法直接查看"):
@@ -924,9 +974,22 @@ class MainWindow(QMainWindow):
                     it.text = txt
                     self._add(it)
                     n_user += 1
+                    # 发过图片的，在用户消息后面补一个图片块
+                    if had_image and img_idx < len(saved_imgs):
+                        pth = Path(saved_imgs[img_idx])
+                        img_idx += 1
+                        if pth.is_file():
+                            oi = Item("", "ocr")
+                            oi.tool = pth.name
+                            oi.text = "（历史里的图片，OCR 原文没有存下来）"
+                            oi._pending = pth
+                            self._add(oi)
                 elif ptype == "text":
                     txt = (p.get("text") or "").strip()
                     if not txt:
+                        continue
+                    # 模型复述 payload 的产物，不是回答
+                    if any(mk in txt for mk in PAYLOAD_MARKS):
                         continue
                     it = Item(p.get("id") or "", "text")
                     it.text = txt
@@ -1698,6 +1761,9 @@ class MainWindow(QMainWindow):
                 if not sid:
                     sid = ag.create_session(self.agent, self.workdir)
                     self.session_id = sid
+                # 图片路径要记住（含继续对话时新发的图），
+                # 否则切走再切回来，历史里只剩 OCR 文字、缩略图没了
+                self._remember_images(sid, images)
                 ag.send_message(self.agent, sid, payload, timeout=900)
                 # 对账：SSE 可能漏事件（断流/重连），用 POST 返回值对应的消息链补齐。
                 # 流式用来「快」，这里用来「准」。

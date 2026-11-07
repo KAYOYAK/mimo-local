@@ -61,12 +61,15 @@ MIMO_AGENT_DIR = ROOT / "agent"          # XDG 四路径的落点
 
 # ---------- 版本 ----------
 # 单一来源。About、诊断报告、安装器都从这里取，别在各处再写一份。
-VERSION = "1.0.12"
+VERSION = "1.0.13"
 
 # ---------- 运行期设置 ----------
 # 当前模型、端口等可变状态存在这里，**不写回本文件**。
 # 打包成 exe 后 config.py 还在，但改它是错的：中途被杀会留半截源码。
 SETTINGS_FILE = ROOT / "settings.json"
+# 每个会话发过哪些图片 —— 切换对话时要把缩略图恢复出来，
+# 但 MiMo Code 的历史里只存 OCR 文本，不存图片路径。
+SESSION_IMAGES_FILE = ROOT / "agent" / "session-images.json"
 
 # OCR 引擎的 pid 文件。tools/ocr.py 起的引擎不属于 UI 管，靠这个收尸。
 OCR_PID_FILE = LOGS / "ocr.pid"

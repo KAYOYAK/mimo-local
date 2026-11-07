@@ -316,6 +316,20 @@ def check_render(c: Checker):
     else:
         c.ok("隐藏文本 / 分隔标记 / 空内容都被正确过滤")
 
+    # payload 复述必须被拦（模型有时把收到的 payload 当回答复述一遍）
+    try:
+        from core.render import looks_like_payload
+        full = ("【用户的问题】\n翻译\n\n【用户发的图片：a.png】\n"
+                "这是**图片里的内容**，不是用户打的字\n"
+                "⚠ 你无法直接查看图片本身")
+        ok2 = looks_like_payload(full) and not looks_like_payload("图片里是 MR DIY 的收据")
+        if ok2:
+            c.ok("模型复述 payload 时会被拦住（不是只按长度判断）")
+        else:
+            c.warn("payload 复述判据可能误判")
+    except Exception as e:
+        c.warn(f"payload 判据检查失败：{e}")
+
     # echo 语义：发过一次就只吞一次
     e = {"继续": 1}
     d1, _ = decide({"type": "text", "text": "继续"}, e)

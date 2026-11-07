@@ -32,6 +32,26 @@ INVISIBLE = {"step-start", "step-finish", "snapshot", "patch"}
 
 MAX_TEXT = 4000        # 超长注入文本的截断阈值
 
+# 我们发给模型的 payload 的特征标记。
+# 9B 有时会把收到的 user message 原样复述一遍当成自己的回答，
+# 那些文本会带着这些结构标记 —— 它们不是回答，不能显示。
+PAYLOAD_MARKS = ("【用户的问题】", "【用户发的图片：", "【用户的情况】",
+                 "你无法直接查看图片本身", "这是**图片里的内容**")
+
+
+def looks_like_payload(text: str) -> bool:
+    """这段文字是不是「模型把我们的 payload 复述了一遍」。
+
+    判据：同时出现 **两处以上** payload 结构标记。
+    完整 payload 一定带「【用户的问题】」+「【用户发的图片：」+
+    「你无法直接查看图片本身」，命中 3 个。
+    而真实回答即使提到「图片里的内容」，也只命中 1 个 —— 不能误杀。
+    """
+    if not text:
+        return False
+    hits = sum(1 for mk in PAYLOAD_MARKS if mk in text)
+    return hits >= 2
+
 
 def decide(part: dict[str, Any], echoes: dict[str, int]) -> tuple[Step | None, str]:
     """决定一个 part 要不要渲染。
@@ -64,6 +84,9 @@ def decide(part: dict[str, Any], echoes: dict[str, int]) -> tuple[Step | None, s
             if txt == key or txt.startswith(key) or key.startswith(txt):
                 echoes[key] -= 1
                 return None, "echo（用户已显示）"
+        # 模型把 payload 复述了一遍 —— 不是回答
+        if looks_like_payload(txt):
+            return None, "复述了发给模型的 payload（不是回答）"
         if len(txt) > MAX_TEXT:
             txt = txt[:MAX_TEXT] + "\n…（内容过长，已截断）"
         return Step("text", txt), "正文"
