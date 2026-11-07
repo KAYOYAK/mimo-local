@@ -1011,11 +1011,19 @@ class MainWindow(QMainWindow):
                 parts.append(f'<div style="color:{C_LINE}; margin:14px 0;">'
                              f'<hr style="border:none;border-top:1px solid {C_LINE};"></div>')
             elif it.role == "user":
+                # 我说的话在**右边**：用表格把内容推到右侧，左边留空。
+                # 不是整体分成两栏，是每条消息各自对齐
+                # （QTextBrowser 不支持 flex/float，只能靠表格实现）。
+                # 留 42% 空，最多占 58% —— 太宽就不像气泡了。
+                body = html.escape(it.text).replace(chr(10), "<br>")
                 parts.append(
-                    f'<div style="margin:16px 0 6px 0;">'
-                    f'<span style="color:{C_ACCENT};font-weight:600;">你</span></div>'
-                    f'<div style="color:{C_TXT};margin:0 0 4px 0;">'
-                    f'{html.escape(it.text).replace(chr(10), "<br>")}</div>'
+                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0"'
+                    f' style="margin:16px 0 8px 0;">'
+                    f'<tr><td width="42%"></td>'
+                    f'<td width="58%" bgcolor="#2b2b2b">'
+                    f'<table width="100%" cellpadding="10" cellspacing="0" border="0"><tr>'
+                    f'<td style="color:{C_TXT};line-height:1.65;">{body}</td>'
+                    f'</tr></table></td></tr></table>'
                 )
             elif it.role == "system":
                 parts.append(
@@ -1098,10 +1106,13 @@ class MainWindow(QMainWindow):
                         f'{arrow} 思考过程 <span style="color:{C_TXT3};opacity:0.7;">'
                         f'（{nchars} 字）</span></a></div>'
                     )
-            else:  # text
+            else:  # text —— AI 的回答在**左边**
+                body = html.escape(it.text).replace(chr(10), "<br>")
                 parts.append(
-                    f'<div style="color:{C_TXT};margin:6px 0;line-height:1.7;">'
-                    f'{html.escape(it.text).replace(chr(10), "<br>")}</div>'
+                    f'<div align="left" style="color:{C_ACCENT};font-size:11px;'
+                    f'margin:10px 0 2px 2px;">MiMo</div>'
+                    f'<div style="color:{C_TXT};margin:0 2px 8px 2px;'
+                    f'line-height:1.7;">{body}</div>'
                 )
         parts.append("</div>")
 
