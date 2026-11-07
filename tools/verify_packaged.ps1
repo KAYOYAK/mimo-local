@@ -44,6 +44,9 @@ if (-not $SkipBuild) {
         --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick `
         --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia `
         --add-data "VERSION.txt;." `
+        --add-data "assets/app.ico;." `
+        --add-data "assets/app.png;." `
+        --icon "assets/app.ico" `
         --collect-submodules tools main.py 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { Bad "打包失败"; exit 1 }
     Ok "打包完成 $([math]::Round((Get-Item $exe).Length/1MB,1)) MB"

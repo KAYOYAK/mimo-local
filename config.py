@@ -17,7 +17,6 @@ else:
 
 ASSETS = ROOT / "assets"
 LOGS = ROOT / "logs"
-
 # 打包成 exe 装到别处后，assets（mimo.exe + OCR 模型，约 880 MB）未必跟着走。
 # 找不到就用开发目录里那份 —— 自用软件，没必要为这 880 MB 反复复制。
 ASSETS_FALLBACK = Path(r"D:\mimo-desktop\assets")
@@ -25,6 +24,18 @@ if not ASSETS.is_dir() and ASSETS_FALLBACK.is_dir():
     ASSETS = ASSETS_FALLBACK
 
 # AGENTS.md（OCR 工具说明）也一样，装到别处时 fallback
+# 图标：窗口/任务栏用。打包成 onefile 后 --add-data 的内容在 _MEIPASS
+# （临时解压目录），不在 exe 旁边 —— 所以这两个路径要分开算。
+if getattr(sys, "frozen", False):
+    _RES = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+else:
+    _RES = ROOT
+ICON_FILE = _RES / "app.ico"
+ICON_PNG = _RES / "app.png"
+if not ICON_FILE.is_file() and (ASSETS / "app.ico").is_file():
+    ICON_FILE = ASSETS / "app.ico"
+if not ICON_PNG.is_file() and (ASSETS / "app.png").is_file():
+    ICON_PNG = ASSETS / "app.png"
 AGENTS_FILE = ROOT / "AGENTS.md"
 _AGENTS_FALLBACK = Path(r"D:\mimo-desktop\AGENTS.md")
 if not AGENTS_FILE.exists() and _AGENTS_FALLBACK.exists():
@@ -61,7 +72,7 @@ MIMO_AGENT_DIR = ROOT / "agent"          # XDG 四路径的落点
 
 # ---------- 版本 ----------
 # 单一来源。About、诊断报告、安装器都从这里取，别在各处再写一份。
-VERSION = "1.0.18"
+VERSION = "1.0.19"
 
 # ---------- 运行期设置 ----------
 # 当前模型、端口等可变状态存在这里，**不写回本文件**。

@@ -1974,6 +1974,16 @@ class MainWindow(QMainWindow):
 def run():
     app = QApplication(sys.argv)
     app.setApplicationName("MiMo Local")
+    app.setApplicationDisplayName("MiMo Local")
+    # 窗口/任务栏图标。打包后 assets 在 exe 内部，用 config.ROOT 找；
+    # 找不到就算了，不影响运行。
+    try:
+        ico = config.ROOT / "assets" / "app.ico"
+        if ico.is_file():
+            from PySide6.QtGui import QIcon
+            app.setWindowIcon(QIcon(str(ico)))
+    except Exception:
+        pass
     w = MainWindow()
     w.show()
     return app.exec()
