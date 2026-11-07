@@ -126,7 +126,7 @@ class Bridge(QObject):
 class Item:
     """对话区里的一块内容。part 更新时按 id 找回来改。"""
 
-    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role")
+    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role", "_pending")
 
     def __init__(self, id_, kind, role="assistant"):
         self.id = id_
@@ -136,6 +136,7 @@ class Item:
         self.status = ""
         self.args = ""
         self.role = role
+        self._pending = None
 
 
 class MainWindow(QMainWindow):
@@ -161,6 +162,7 @@ class MainWindow(QMainWindow):
         # _reconcile 用它判断「补过没有」——只看 _by_id 会把吞掉的 part
         # 再渲染一遍，用户的问题就会重复出现。
         self._seen: set[str] = set()
+        self._pending_images: list[Path] = []   # 待发送的图片
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -297,9 +299,32 @@ class MainWindow(QMainWindow):
 
         # ---------- 输入区 ----------
         comp = QWidget()
-        cl = QHBoxLayout(comp)
-        cl.setContentsMargins(20, 14, 20, 12)
+        cv = QVBoxLayout(comp)
+        cv.setContentsMargins(20, 10, 20, 12)
+        cv.setSpacing(6)
+
+        # 待发送图片条（没选图片时隐藏）
+        self.image_bar = QWidget()
+        self._image_bar_layout = QHBoxLayout(self.image_bar)
+        self._image_bar_layout.setContentsMargins(0, 0, 0, 0)
+        self._image_bar_layout.setSpacing(6)
+        self._image_bar_layout.addStretch(1)
+        self.image_bar.setVisible(False)
+        cv.addWidget(self.image_bar)
+
+        # 输入行
+        row = QWidget()
+        cl = QHBoxLayout(row)
+        cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(10)
+
+        # 图片按钮：点它选图，选完的图会显示在上面的条里
+        self.btn_image = QPushButton("图片")
+        self.btn_image.setFixedHeight(84)
+        self.btn_image.setFixedWidth(66)
+        self.btn_image.setToolTip("选图片。发送时会先跑本地 OCR，识别结果直接贴在对话里")
+        self.btn_image.clicked.connect(self.pick_images)
+        cl.addWidget(self.btn_image)
 
         self.input = QPlainTextEdit(objectName="input")
         self.input.setPlaceholderText("说要做什么…  Enter 发送 · Shift+Enter 换行")
@@ -327,6 +352,7 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self.stop_round)
         cl.addWidget(self.btn_stop)
 
+        cv.addWidget(row)
         outer.addWidget(comp)
 
         foot = QWidget()
@@ -343,7 +369,9 @@ class MainWindow(QMainWindow):
             "纯本地 AI 编程助手。\n"
             "  1. 点「选择目录」，挑一个项目文件夹\n"
             "  2. 点「启动引擎」，等模型加载\n"
-            "  3. 直接说要做什么 —— 它会读写文件、执行命令，需要看图时自己调本地 OCR\n"
+            "  3. 直接说要做什么 —— 它会读写文件、执行命令\n"
+            "  4. 要看图就点左下角「图片」选一张 —— 发送时先跑本地 OCR，\n"
+            "     识别结果直接贴在对话里（不用去翻文件），同时喂给模型\n"
         )
 
     # ---------- 输入框快捷键 ----------
@@ -356,6 +384,73 @@ class MainWindow(QMainWindow):
                 self.send()
                 return True
         return super().eventFilter(obj, ev)
+
+    # ---------- 图片 ----------
+
+    IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+
+    def pick_images(self):
+        """选图片。可以多选。"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择图片", "",
+            "图片 (*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tif *.tiff)",
+        )
+        for f in files:
+            p = Path(f)
+            if p.is_file() and p.suffix.lower() in self.IMG_EXTS and p not in self._pending_images:
+                self._pending_images.append(p)
+        self._refresh_image_bar()
+
+    def _refresh_image_bar(self):
+        """重建待发送图片条。"""
+        lay = self._image_bar_layout
+        while lay.count() > 1:          # 保留末尾的 stretch
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        for i, p in enumerate(self._pending_images):
+            chip = QPushButton(f"{p.name}  ✕")
+            chip.setToolTip(str(p))
+            chip.setStyleSheet(
+                f"QPushButton {{ background: {C_CARD}; color: {C_TXT2};"
+                f" border: 1px solid {C_LINE}; border-radius: 6px;"
+                f" padding: 4px 10px; font-size: 11px; }}"
+                f"QPushButton:hover {{ color: {C_ERR}; border-color: {C_ERR}; }}"
+            )
+            chip.clicked.connect(lambda _=False, idx=i: self._remove_image(idx))
+            lay.insertWidget(i, chip)
+
+        self.image_bar.setVisible(bool(self._pending_images))
+
+    def _remove_image(self, idx: int):
+        if 0 <= idx < len(self._pending_images):
+            self._pending_images.pop(idx)
+            self._refresh_image_bar()
+
+    def _run_ocr_for_images(self, images: list[Path], task: str = "doc") -> list[tuple[Path, str, str]]:
+        """对一批图片跑 OCR。返回 [(路径, 文字, 错误)]。
+
+        为什么界面自己跑而不是等模型调工具：
+          模型调 `--ocr` 时结果写进文件，还得再读一次 —— 用户看不到，
+          而且 9B 经常把它念不全。界面直接跑，结果原样贴在对话里。
+        """
+        from core import client
+        out = []
+        for img in images:
+            # 引擎没起就先起（显存够时启动阶段已经起过了）
+            try:
+                if not self.ocr_engine:
+                    self.ocr_engine = eng.make_ocr_engine()
+                if not self.ocr_engine.running:
+                    self.bridge.status.emit("启动 OCR 引擎", "busy")
+                    self.ocr_engine.start(on_phase=lambda s: self.bridge.status.emit(s, "busy"))
+                text = client.ocr_image(config.OCR_PORT, img, task)
+                out.append((img, text, ""))
+            except Exception as e:
+                out.append((img, "", str(e)))
+        return out
 
     # ================= 工具菜单 =================
 
@@ -576,6 +671,19 @@ class MainWindow(QMainWindow):
                     f'<div style="margin:8px 0 2px 0;font-size:12px;">'
                     f'<span style="color:{color};">{icon}</span> '
                     f'<span style="color:{C_ACCENT};">{html.escape(it.tool)}</span></div>{args}'
+                )
+            elif it.kind == "ocr":
+                # OCR 结果：等宽字体 + 边框感，方便对原文和复制
+                body = html.escape(it.text).replace(chr(10), "<br>")
+                head = (f'<span style="color:{C_ACCENT};font-size:11px;">'
+                        f'📎 {html.escape(it.tool)}</span>')
+                parts.append(
+                    f'<div style="margin:10px 0;padding:10px 12px;'
+                    f'background:{C_CARD};border-left:3px solid {C_ACCENT};'
+                    f'border-radius:4px;">'
+                    f'<div style="margin-bottom:6px;">{head}</div>'
+                    f'<div style="color:{C_TXT};font-family:Consolas,monospace;'
+                    f'font-size:12px;line-height:1.6;">{body}</div></div>'
                 )
             elif it.kind == "reasoning":
                 parts.append(
@@ -899,7 +1007,10 @@ class MainWindow(QMainWindow):
         if self.busy:
             return
         text = self.input.toPlainText().strip()
-        if not text:
+        images = list(self._pending_images)
+
+        # 只发图片、不写字也算一次发送
+        if not text and not images:
             return
         if not (self.chat_engine and self.chat_engine.running and self.agent):
             QMessageBox.information(self, "引擎未启动", "先点「启动引擎」。")
@@ -909,22 +1020,59 @@ class MainWindow(QMainWindow):
             return
 
         self.input.clear()
-        _k = text.strip()
+        self._pending_images.clear()
+        self._refresh_image_bar()
+
+        # 用户消息
+        shown = text or ("（看图）" if images else "")
+        _k = shown.strip()
         self._echoes[_k] = self._echoes.get(_k, 0) + 1
         u = Item("", "text", role="user")
-        u.text = text
+        u.text = shown
         self._add(u)
+
+        # 图片先占位（OCR 结果稍后填）
+        for img in images:
+            st = Item("", "ocr")
+            st.tool = img.name
+            st.text = "识别中…"
+            self._add(st)
+            st._pending = img
+
         self._set_busy(True)
 
         sid = self.session_id
 
         def work():
             try:
-                nonlocal sid
+                nonlocal sid, text
+
+                # ---------- 1. 有图就先跑 OCR，结果直接贴对话区 ----------
+                ocr_block = ""
+                if images:
+                    self.bridge.status.emit("识别图片", "busy")
+                    results = self._run_ocr_for_images(images)
+                    for img, txt, err in results:
+                        # 找到占位 Item 填内容
+                        for it in self.items:
+                            if it.kind == "ocr" and it.tool == img.name and it.text == "识别中…":
+                                it.text = txt if txt else f"识别失败：{err}"
+                                break
+                        if txt:
+                            ocr_block += f"\n\n[图片 {img.name} 的 OCR 结果]\n{txt}"
+                        else:
+                            ocr_block += f"\n\n[图片 {img.name} 识别失败：{err}]"
+                    self._dirty = True
+
+                # ---------- 2. 把 OCR 文字拼进发给模型的内容 ----------
+                payload = text or "看看这些图片的内容，用中文说明。"
+                if ocr_block:
+                    payload = payload + ocr_block
+
                 if not sid:
                     sid = ag.create_session(self.agent, self.workdir)
                     self.session_id = sid
-                ag.send_message(self.agent, sid, text, timeout=900)
+                ag.send_message(self.agent, sid, payload, timeout=900)
                 # 对账：SSE 可能漏事件（断流/重连），用 POST 返回值对应的消息链补齐。
                 # 流式用来「快」，这里用来「准」。
                 self._reconcile(sid)

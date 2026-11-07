@@ -149,6 +149,38 @@ def check_hardware(c: Checker):
          f"{'自动减层' if plan.auto_fit else f'{plan.ngl} 层卸载'}")
 
 
+def check_image_input(c: Checker):
+    """发图入口必须存在，而且 OCR 结果要显示在对话区。
+
+    真实用户反馈（第一条不是理论边界的）：
+      「没有给他发图片的功能按钮，并且因为小米OCR得到的是文件，
+        所以我让他提取图片的文字的时候还要去文件那里看」
+    所以这条检查看的是：按钮在不在、选中的图会不会显示、
+    OCR 结果有没有一个 ocr 类型的 Item 承接它（而不是只写文件）。
+    """
+    c.section("发图与 OCR 显示")
+    ui = None
+    try:
+        ui = (config.ROOT / "ui_qt.py").read_text(encoding="utf-8")
+    except Exception:
+        pass
+    if not ui:
+        c.warn("打包后读不到 ui_qt.py，跳过发图检查")
+        return
+
+    checks = [
+        ("self.btn_image", "有「图片」按钮"),
+        ("clicked.connect(self.pick_images)", "按钮接到了选图函数"),
+        ("getOpenFileNames", "支持多选图片"),
+        ("kind == \"ocr\"", "OCR 结果有专门的渲染分支"),
+        ("_run_ocr_for_images", "界面自己跑 OCR（不依赖模型调工具）"),
+    ]
+    missing = [desc for needle, desc in checks if needle not in ui]
+    if missing:
+        c.fail("发图功能不完整，缺：" + "、".join(missing))
+    else:
+        c.ok("发图按钮 → 选图 → 界面跑 OCR → 结果贴对话区，整条链路都在")
+
 def check_dirs(c: Checker):
     c.section("目录与文件")
     for label, p, optional in (
@@ -317,6 +349,7 @@ def main() -> int:
     check_models(c)
     check_hardware(c)
     check_render(c)
+    check_image_input(c)
     check_dirs(c)
     check_ports(c)
     check_config(c)
