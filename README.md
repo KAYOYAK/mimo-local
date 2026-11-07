@@ -82,9 +82,24 @@ python main.py
 
 ### 打包成 exe
 
-```bash
-pyinstaller --onefile --windowed --name MiMoLocal \
-  --collect-submodules tools main.py
+```powershell
+pyinstaller --onefile --windowed --name MiMoLocal `
+    --add-data "VERSION.txt;." `
+    --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets `
+    --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick `
+    --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia `
+    --collect-submodules tools main.py
+```
+
+`--add-data "VERSION.txt;."` **不能漏**：安装器的版本号在打包后读不到
+`config.py`，会回退读 `VERSION.txt`；两个都没有就写 `0.0.0`。
+
+打包完**必须跑一次** `tools\verify_packaged.ps1` —— 它用临时目录当安装位置，
+验证 frozen 分支、`--ocr` 子命令、settings 位置、卸载串，三条断言都不需要显卡：
+
+```powershell
+pwsh -File tools\verify_packaged.ps1              # 重新打包 + 验证
+pwsh -File tools\verify_packaged.ps1 -SkipBuild   # 用现有 dist\ 验证
 ```
 
 打包出来的 exe 需要能在旁边找到 `assets/`。找不到时会回退到开发目录
@@ -100,7 +115,7 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 
 顶栏的 `⋯` 里有：
 
-- **自检** —— 29 项检查，一眼看出哪里坏了
+- **自检** —— 一眼看出哪里坏了（项数写在输出里，别在这里硬编码）
 - **生成诊断报告** —— 硬件 / 引擎配置 / 模型指纹 / 日志尾部，一份文本
 - **切换模型** —— 扫描模型目录换一个；状态存在 `settings.json`，重启生效
 - **打开日志目录**
@@ -171,7 +186,7 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 | `core/logs.py` | 日志轮转 |
 | `ui_qt.py` | PySide6 界面 + 流式渲染 |
 | `tools/ocr.py` | OCR 工具，模型通过 bash 调它 |
-| `tools/selfcheck.py` | 34 项自检（含渲染管线检查） |
+| `tools/selfcheck.py` | 自检（含渲染管线检查） |
 | `tools/claims.py` | **声明断言**：把本文档的承诺变成会失败的检查 |
 | `tools/report.py` | 诊断报告 |
 | `tools/verify_packaged.ps1` | 打包后路径验证（不需要显卡） |
@@ -192,8 +207,8 @@ pyinstaller --onefile --windowed --name MiMoLocal \
 两个都是只读的，随时可以跑：
 
 ```bash
-python main.py --selfcheck   # 34 项：路径、引擎、模型、硬件、渲染管线、端口、配置
-python main.py --claims      # 20 条：本文档的承诺是否被代码兑现
+python main.py --selfcheck   # 路径、引擎、模型、硬件、渲染管线、端口、配置
+python main.py --claims      # 本文档的承诺是否被代码兑现
 ```
 
 界面上在 `⋯` 菜单里也有这两个入口 —— 一个只能靠命令行跑的工具，实际上没人跑。

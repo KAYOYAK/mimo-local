@@ -157,6 +157,10 @@ class MainWindow(QMainWindow):
         self._by_id: dict[str, Item] = {}
         self._dirty = False
         self._echoes: dict[str, int] = {}   # 用户发过的原文 → 剩余可吞次数
+        # 处理过的 part id（含被 echo 吞掉的）。
+        # _reconcile 用它判断「补过没有」——只看 _by_id 会把吞掉的 part
+        # 再渲染一遍，用户的问题就会重复出现。
+        self._seen: set[str] = set()
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -679,10 +683,21 @@ class MainWindow(QMainWindow):
         from core import render as rnd
         step, reason = rnd.decide(part, self._echoes)
         if step is None:
+            # 被吞掉的 part 也要记成「见过」。
+            # 否则 _reconcile 会发现它不在 _by_id 里、重新 emit 一遍，
+            # 而那时 _echoes 已经减到 0 → 用户自己问的话会被当成模型
+            # 回答在下面再出现一次。
+            if pid:
+                self._seen.add(pid)
+            return
+
+        # 没有 id 的 part 无法去重：流式更新时每次都会新建一个块，
+        # 界面会出现重复内容。宁可不显示。
+        if not pid:
             return
 
         # 同一个 part 反复更新（流式）→ 找到原来那块改内容
-        it = self._by_id.get(pid) if pid else None
+        it = self._by_id.get(pid)
         if it is None:
             it = Item(pid, "text")
             self._add(it)
@@ -747,7 +762,7 @@ class MainWindow(QMainWindow):
             msgs = ag.get_messages(self.agent, sid)
         except Exception:
             return
-        known = set(self._by_id.keys())
+        known = set(self._by_id.keys()) | self._seen
         for m in msgs:
             for p in m.get("parts", []):
                 pid = p.get("id")
@@ -765,7 +780,8 @@ class MainWindow(QMainWindow):
         self.session_id = None
         self.items.clear()
         self._by_id.clear()
-        self._echoes.clear()      # 换项目后 echo 计数要清，否则会串
+        self._echoes.clear()
+        self._seen.clear()      # 换项目后 echo 计数要清，否则会串
         self._add(Item("welcome2", "divider"))
         self._add_system_text(f"项目目录：{self.workdir}")
 

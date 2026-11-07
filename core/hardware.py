@@ -95,7 +95,7 @@ def get_cpu_cores() -> int:
         # GetLogicalProcessorInformation 复杂，先用 os.cpu_count 折半估算
         n = os.cpu_count() or 8
         # Ryzen 9 8945HX: 32 线程 / 16 核。用一半。
-        return max(4, n // 2)
+        return max(1, n // 2)
     except Exception:
         return 8
 
@@ -175,14 +175,10 @@ def plan_chat() -> ChatPlan:
             notes.append(f"上下文 {ctx}（按显存 {vram} GB 自动，上限 {ctx_max}）")
 
     # ---- KV 缓存精度 ----
-    if config.CHAT_KV:
-        kv = config.CHAT_KV
-    elif vram <= 0:
-        kv = "q4_0"
-    elif vram < 9:
-        kv = "q4_0"
-    else:
-        kv = "q8_0"
+    # 必须调 derive_kv，不要在这里再抄一份 if/elif：
+    # 抄一份就有「门禁测的代码」和「产品跑的代码」两份，哪天只改一边，
+    # claims 全绿而行为不变（或反过来）。现在两边是同一个函数。
+    kv = config.CHAT_KV or derive_kv(vram)
 
     # ---- 内存不够时主动压 ----
     if ram and model_gb and ram < model_gb * 1.5:

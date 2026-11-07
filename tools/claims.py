@@ -296,6 +296,51 @@ def claim_readme_switches():
           "全部存在" if not missing else "缺: " + ", ".join(missing))
 
 
+def claim_reconcile_no_duplicate():
+    """补账不能把已经吞掉的 part 再渲染一遍。
+
+    真实 bug（v1.0.3 修过一轮后又发现的）：
+      _reconcile 用 set(self._by_id.keys()) 判断「这个 part 渲染过没有」，
+      但被 echo 吞掉的用户 part 从来没进过 _by_id。于是每轮结束后它被
+      重新 emit 一遍，而那时 _echoes 已经减到 0 → 用户自己问的那句话会
+      以「模型回答」的样式在下面再出现一次。
+
+      两套机制（按文本计数的 echo / 按 pid 判断已渲染）各自都对，
+      合起来漏了。所以这里必须同时断言两者在同一个集合上。
+    """
+    ui = _read_repo_file("ui_qt.py")
+    if not ui:
+        skip("补账不重复渲染", "打包后读不到源码")
+        return
+    has_seen = "_seen" in ui and "self._seen.add(pid)" in ui
+    joined = "set(self._by_id.keys()) | self._seen" in ui
+    check(has_seen and joined,
+          "补账不能把已吞掉的 part 再渲染一遍（否则用户问题会重复出现）",
+          f"_seen 记录={has_seen}, reconcile 并集={joined}")
+
+
+def claim_gate_tests_real_code():
+    """门禁测的函数必须就是产品跑的函数。
+
+    真实坑：plan_chat 里原本自己抄了一份 KV 判断，而 claims 表驱动测的是
+    derive_kv —— 两份逻辑，今天阈值恰好一致所以没现病，但哪天只改一边，
+    门禁全绿而行为不变（或反过来）。现在两边是同一个函数。
+    """
+    from core import hardware as hw
+    src = _source_of(hw, "plan_chat")
+    if src:
+        check("derive_kv(" in src and "derive_ctx(" in src,
+              "plan_chat 必须直接调 derive_kv/derive_ctx（不能自己再抄一份）",
+              f"调了 derive_kv={'derive_kv(' in src}, derive_ctx={'derive_ctx(' in src}")
+    else:
+        # 打包后读不到源码：退而对行为做检查（不会拿错值）
+        p = hw.plan_chat()
+        expect_kv = hw.derive_kv(hw.get_nvidia_vram_gb())
+        check(p.kv_type == expect_kv,
+              "plan_chat 的 KV 精度必须和 derive_kv 一致（同一个函数）",
+              f"plan={p.kv_type}, derive={expect_kv}")
+
+
 def claim_no_hardcoded_dev_path():
     """AGENTS 说明里不能出现开发机的写死路径（除非就是开发机）。"""
     from core import agent

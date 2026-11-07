@@ -1,0 +1,46 @@
+v1.0.4: 修 echo×reconcile 重复渲染 + 门禁测的不是产品代码
+
+## 必须修 1：用户自己的问题会重复出现
+   _reconcile 判断「这个 part 渲染过没有」用的是 set(self._by_id.keys())，
+   但被 echo 吞掉的用户 part 从来没进过 _by_id。于是：
+     send() → _echoes[问题] = 1
+       → SSE 送来用户 part → decide 命中 echo → 吞掉（不进 _by_id），计数减到 0
+       → POST 返回 → _reconcile 发现 pid 不在 _by_id → 重新 emit
+       → decide：_echoes 已经是 0 → 当成正文渲染
+   结果：每轮结束后，用户自己问的那句话会以「模型回答」的样式再出现一次。
+
+   这是修 echo 过滤时，把「按文本计数的 echo」和「按 pid 判断已渲染」
+   两套机制拼在一起才出现的 —— 两边各自都对，合起来漏了。
+
+   修：加 self._seen 集合，被吞掉的 part 也记成「见过」；
+   _reconcile 用 set(self._by_id) | self._seen 判断。
+
+## 必须修 2：门禁测的代码不是产品跑的代码
+   plan_chat() 里自己抄了一份 KV 判断（if config.CHAT_KV / elif vram <= 0 /
+   elif vram < 9），而 claims 表驱动测的是 derive_kv —— 两份逻辑。
+   今天阈值恰好一致所以没现病，但哪天只改一边：claims 全绿而行为不变，
+   或者产品变了门禁还绿。
+   修：kv = config.CHAT_KV or derive_kv(vram)，两边是同一个函数。
+
+## 新增两条断言（都能失败，已验证）
+   - claim_reconcile_no_duplicate  查 _seen 记录 + reconcile 并集
+     故意删掉并集 → 立刻报 21/22
+   - claim_gate_tests_real_code    查 plan_chat 是否真的调 derive_kv
+     打包后读不到源码时退而对行为做比对（plan.kv_type == derive_kv(vram)）
+
+## 文档漂移（review 说这是最讽刺的两处）
+   1. README 同一份文件里「自检 29 项」和「34 项」并存，而下面几行正好写着
+      「不符的时候要么改代码，要么改这份文档，两者不能同时成立」。
+      改成不硬编码数字（项数写在运行时输出里）。
+   2. README 的打包命令缺 --add-data "VERSION.txt;."，照它打包安装器会写 0.0.0。
+      补上，并且把 verify_packaged.ps1 的完整构建命令抄进去。
+
+## 小项
+   - _on_part：没有 id 的 part 之前每次更新都新建 Item（流式会出重复块），
+     改成直接不显示（没有 id 本来也无法去重）
+   - get_cpu_cores：max(4, n//2) 在 2 核机器上给 4 线程（超配变慢），
+     改成 max(1, n//2)
+   - switch_model 模块开头还写着「写回 config.py」，和 claim_no_source_rewrite
+     的前提矛盾，改掉
+   - verify_packaged.ps1 在没装模型的机器上会给 [缺失] 报失败 ——
+     它验的是打包路径，不是这台机器装没装模型。改成检测到没模型就跳过第 2 步

@@ -87,18 +87,27 @@ try {
 
     # ---------- 2. selfcheck ----------
     Step 2 "--selfcheck"
-    $p2 = Start-Process (Join-Path $probe "MiMoLocal.exe") -ArgumentList "--selfcheck" `
-        -WorkingDirectory $probe -PassThru -Wait -WindowStyle Hidden
-    $scLog = Join-Path $probe "logs\自检结果.txt"
-    if (Test-Path $scLog) {
-        $text2 = Get-Content $scLog -Raw -Encoding utf8
-        $missing = [regex]::Matches($text2, "\[缺失\]").Count
-        if ($missing -eq 0) { Ok "没有缺失项" }
-        else { Bad "有 $missing 个 [缺失] 项" }
-        $line2 = ($text2 -split "`n" | Where-Object { $_ -match "通过 \d+" }) -join ""
-        if ($line2) { Write-Host "         $($line2.Trim())" -ForegroundColor DarkGray }
+    # 这个脚本验的是「打包后的路径对不对」，不是「这台机器装没装模型」。
+    # 没有模型的机器上 selfcheck 必然有 [缺失] —— 那是环境问题，不是打包问题。
+    $modelDir = "D:\models\MiMo-9B-GGUF"
+    $hasModel = (Test-Path $modelDir) -and
+                ((Get-ChildItem $modelDir -Filter "*.gguf" -EA SilentlyContinue | Measure-Object).Count -gt 0)
+    if (-not $hasModel) {
+        Warn "本机没有模型（$modelDir）—— 跳过第 2 步（这是环境问题，不是打包问题）"
     } else {
-        Bad "没产出 logs\自检结果.txt"
+        $p2 = Start-Process (Join-Path $probe "MiMoLocal.exe") -ArgumentList "--selfcheck" `
+            -WorkingDirectory $probe -PassThru -Wait -WindowStyle Hidden
+        $scLog = Join-Path $probe "logs\自检结果.txt"
+        if (Test-Path $scLog) {
+            $text2 = Get-Content $scLog -Raw -Encoding utf8
+            $missing = [regex]::Matches($text2, "\[缺失\]").Count
+            if ($missing -eq 0) { Ok "没有缺失项" }
+            else { Bad "有 $missing 个 [缺失] 项" }
+            $line2 = ($text2 -split "`n" | Where-Object { $_ -match "通过 \d+" }) -join ""
+            if ($line2) { Write-Host "         $($line2.Trim())" -ForegroundColor DarkGray }
+        } else {
+            Bad "没产出 logs\自检结果.txt"
+        }
     }
 
     # ---------- 3. --ocr ----------
