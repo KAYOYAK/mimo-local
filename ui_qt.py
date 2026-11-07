@@ -1048,6 +1048,7 @@ class MainWindow(QMainWindow):
         self._by_id.clear()
         self._seen.clear()
         self._expanded.clear()
+        self._echoes.clear()   # 跨对话的 echo 计数不能串
         self._add(Item("welcome-load", "divider"))
         self._add_system_text("正在加载历史…")
         self._dirty = True
@@ -1156,6 +1157,7 @@ class MainWindow(QMainWindow):
         self._by_id.clear()
         self._seen.clear()
         self._expanded.clear()
+        self._echoes.clear()   # 跨对话的 echo 计数不能串
         self._add(Item("welcome-new", "divider"))
         self._add_system_text("新对话。直接说要做什么。")
         self.bridge.status.emit("就绪", "ok")
