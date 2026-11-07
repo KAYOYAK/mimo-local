@@ -380,10 +380,10 @@ class AgentServer:
                 if self.proc.poll() is None:
                     self.proc.terminate()
                     try:
-                        self.proc.wait(timeout=5)
+                        self.proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         self.proc.kill()
-                        self.proc.wait(timeout=5)
+                        self.proc.wait(timeout=2)
             except Exception:
                 pass
             self.proc = None

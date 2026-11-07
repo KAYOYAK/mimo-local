@@ -121,6 +121,7 @@ class Bridge(QObject):
     event = Signal(object)
     status = Signal(str, str)      # text, kind
     fatal = Signal(str)
+    quit = Signal()                # 清理完成后让主线程退出
     sessions = Signal(object)      # 会话列表（后台线程拉到后送回主线程）
     loaded = Signal(object)        # 历史消息（切会话时）
 
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
         self._session_images: dict = {}          # 会话 → 发过的图片路径
         self._session_images = self._load_session_images()
         self._sessions_cache: list = []             # 最近一次拉到的会话列表（重命名要用 revision）
+        self._closing = False                       # 正在关闭（避免重复进入 closeEvent）
         self._expanded: set[str] = set()         # 用户手动展开的折叠块
         self._img_paths: dict[str, Path] = {}    # img_id → 原始路径（放大用）
 
@@ -180,6 +182,7 @@ class MainWindow(QMainWindow):
         self.bridge.event.connect(self._on_event)
         self.bridge.status.connect(self._set_status)
         self.bridge.fatal.connect(lambda m: QMessageBox.critical(self, "错误", m))
+        self.bridge.quit.connect(self._do_quit)
         self.bridge.sessions.connect(self._fill_sessions)
         self.bridge.loaded.connect(self._on_loaded)
 
@@ -1917,19 +1920,49 @@ class MainWindow(QMainWindow):
 
     # ================= 退出 =================
 
-    def closeEvent(self, ev):
+    def _do_quit(self):
+        """清理完成，真正退出。"""
         try:
-            for obj in (self.agent, self.chat_engine, self.ocr_engine):
-                if obj:
-                    obj.stop()
-            # 兜底：ocr.py 自己起的引擎不在上面三个里，按 pid 收尸。
-            # 三个 pid 都试一遍 —— 任何一个残留都会让下次启动撞端口。
-            from core import engine as _eng
-            for _pf in (config.CHAT_PID_FILE, config.OCR_PID_FILE, config.AGENT_PID_FILE):
-                _eng.kill_pid(_pf)
+            QApplication.instance().quit()
         except Exception:
-            pass
-        ev.accept()
+            import os
+            os._exit(0)
+    def closeEvent(self, ev):
+        """关窗口：先藏起来让用户觉得「关了」，清理放后台。
+
+        之前这里是同步的 —— 三个引擎各 wait(5) + kill(5)，
+        再加三次 pid 收尸（每次 tasklist 约 1 秒），最坏 30 秒全卡在
+        GUI 线程，Windows 就报「未响应」。
+        """
+        if self._closing:
+            ev.accept()
+            return
+        self._closing = True
+        ev.ignore()                 # 先别真关
+        self.hide()                 # 视觉上立即消失
+        self.bridge.status.emit("正在退出…", "busy")
+
+        def work():
+            try:
+                for obj in (self.agent, self.chat_engine, self.ocr_engine):
+                    if obj:
+                        try:
+                            obj.stop()
+                        except Exception:
+                            pass
+                # 兜底收尸：三个 pid 都试。
+                # ocr.py 自己起的引擎不在上面三个对象里。
+                from core import engine as _eng
+                for _pf in (config.CHAT_PID_FILE, config.OCR_PID_FILE,
+                            config.AGENT_PID_FILE):
+                    try:
+                        _eng.kill_pid(_pf)
+                    except Exception:
+                        pass
+            finally:
+                self.bridge.quit.emit()      # 回主线程再真正退出
+
+        threading.Thread(target=work, daemon=True).start()
 
 
 def run():

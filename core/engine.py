@@ -145,11 +145,11 @@ class Engine:
                 if self.proc.poll() is None:
                     self.proc.terminate()
                     try:
-                        self.proc.wait(timeout=5)
+                        self.proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         # 不听话就硬杀 —— 宁可留不下数据，也不要留僵尸进程
                         self.proc.kill()
-                        self.proc.wait(timeout=5)
+                        self.proc.wait(timeout=2)
             except Exception:
                 pass
             self.proc = None
@@ -269,7 +269,7 @@ def _pid_is_llama(pid: int) -> bool:
     try:
         r = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, timeout=10,
+            capture_output=True, timeout=3,
             # ⚠ 不能用 text=True：中文 Windows 上 tasklist 输出是 GBK
             # （实测报 UnicodeDecodeError: 0xd0），解码失败会让整个校验
             # 静默返回 False —— 收尸功能等于没写。
@@ -294,7 +294,7 @@ def kill_pid(pid_file: Path) -> bool:
             if sys.platform == "win32":
                 subprocess.run(
                     ["taskkill", "/F", "/PID", str(pid)],
-                    capture_output=True, timeout=10, **_no_window_kwargs(),
+                    capture_output=True, timeout=3, **_no_window_kwargs(),
                 )
             else:
                 os.kill(pid, 15)
