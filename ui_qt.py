@@ -693,7 +693,11 @@ class MainWindow(QMainWindow):
 
         # 没有 id 的 part 无法去重：流式更新时每次都会新建一个块，
         # 界面会出现重复内容。宁可不显示。
+        # ⚠ 但**审计不能跟着被削弱** —— `bash: allow` 意味着模型能跑任何
+        # 命令，commands.log 是出事之后唯一能还原现场的东西。所以审计在
+        # 这个 return 之前做掉（审计和渲染是两件事）。
         if not pid:
+            self._maybe_audit(step)
             return
 
         # 同一个 part 反复更新（流式）→ 找到原来那块改内容
@@ -716,10 +720,22 @@ class MainWindow(QMainWindow):
             # 审计：bash 命令全部落盘。配置是 bash: allow + external_directory: allow，
             # 意味着模型能在这台机器上跑任何命令 —— 出事之后这份日志是唯一能
             # 还原现场的东西。
-            if step.tool in ("bash", "shell", "exec") and step.args:
-                self._audit_command(step.args, step.status)
+            self._maybe_audit(step)
 
         self._dirty = True
+
+    def _maybe_audit(self, step):
+        """工具调用要不要记审计日志。
+
+        抽出来的原因：渲染有两条路径（有 id / 没 id），审计必须两条都覆盖。
+        之前审计写在「有 id」分支里，没 id 的 part 直接 return 了 ——
+        虽然是理论边界（MiMo Code 的 part 一般都有 id），但 commands.log
+        是 bash: allow 下唯一能还原现场的东西，不该被渲染去重顺带削弱。
+        """
+        if step is None:
+            return
+        if step.kind == "tool" and step.tool in ("bash", "shell", "exec") and step.args:
+            self._audit_command(step.args, step.status)
 
     def _audit_command(self, args: str, status: str):
         """把模型执行的命令记进 logs/commands.log。

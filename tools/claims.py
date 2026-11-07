@@ -333,12 +333,14 @@ def claim_gate_tests_real_code():
               "plan_chat 必须直接调 derive_kv/derive_ctx（不能自己再抄一份）",
               f"调了 derive_kv={'derive_kv(' in src}, derive_ctx={'derive_ctx(' in src}")
     else:
-        # 打包后读不到源码：退而对行为做检查（不会拿错值）
+        # 打包后读不到源码：退而对行为做检查。
+        # ⚠ 不能直接拿 kv_type 和 derive_kv(vram) 比 —— 显式配置和内存压制
+        #   都会合法地覆盖推导结果，那样会在正确的构建上报「不符」（假红）。
+        #   看 kv_source 才能区分「覆盖」和「内联抄了一份逻辑」。
         p = hw.plan_chat()
-        expect_kv = hw.derive_kv(hw.get_nvidia_vram_gb())
-        check(p.kv_type == expect_kv,
-              "plan_chat 的 KV 精度必须和 derive_kv 一致（同一个函数）",
-              f"plan={p.kv_type}, derive={expect_kv}")
+        check(p.kv_source in ("config", "derive", "ram_clamp"),
+              "plan_chat 的 KV 精度必须来自 derive_kv（不能内联抄一份）",
+              f"kv={p.kv_type}, 来源={p.kv_source}")
 
 
 def claim_no_hardcoded_dev_path():

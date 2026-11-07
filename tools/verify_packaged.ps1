@@ -89,8 +89,12 @@ try {
     Step 2 "--selfcheck"
     # 这个脚本验的是「打包后的路径对不对」，不是「这台机器装没装模型」。
     # 没有模型的机器上 selfcheck 必然有 [缺失] —— 那是环境问题，不是打包问题。
-    $modelDir = "D:\models\MiMo-9B-GGUF"
-    $hasModel = (Test-Path $modelDir) -and
+    # 模型目录从 config 取，不要硬编码（换目录后守卫会永远跳过第 2 步）。
+    $modelDir = ""
+    try {
+        $modelDir = (& python -c "import sys; sys.path.insert(0,'.'); import config; print(config.MODEL_DIR)" 2>&1 | Out-String).Trim()
+    } catch { }
+    $hasModel = $modelDir -and (Test-Path $modelDir) -and
                 ((Get-ChildItem $modelDir -Filter "*.gguf" -EA SilentlyContinue | Measure-Object).Count -gt 0)
     if (-not $hasModel) {
         Warn "本机没有模型（$modelDir）—— 跳过第 2 步（这是环境问题，不是打包问题）"
@@ -165,10 +169,46 @@ finally {
 # ---------- 汇总 ----------
 Write-Host ""
 Write-Host ("=" * 64)
+$verdict = if ($fail -eq 0) { "打包验证通过" } else { "打包验证失败：$fail 项" }
 if ($fail -eq 0) {
-    Write-Host "  打包验证通过" -ForegroundColor Green
+    Write-Host "  $verdict" -ForegroundColor Green
 } else {
-    Write-Host "  打包验证失败：$fail 项" -ForegroundColor Red
+    Write-Host "  $verdict" -ForegroundColor Red
 }
 Write-Host ("=" * 64)
+
+# ---------- 留痕：通过的运行必须留下证据 ----------
+# logs/ 在 gitignore 里，仓库看不到运行结果。所以把 summary 写进 docs/
+# 并提交 —— 以后每次打包验证都能对得上「哪个 commit、什么时间、验了什么」。
+try {
+    $sha = ""
+    try { $sha = (& git rev-parse --short HEAD 2>&1 | Out-String).Trim() } catch { }
+    $exeSha = if (Test-Path $exe) { (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() } else { "(无 exe)" }
+    $lines = @(
+        "# 打包验证记录（自动生成，不要手改）",
+        "",
+        "- 时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        "- 提交: $sha",
+        "- 结论: $verdict",
+        "- exe SHA-256: ``$exeSha``",
+        "",
+        "## 这一轮验证了什么",
+        "",
+        "1. ``--claims`` frozen 模式（声明断言，含 frozen 分支真的走到）",
+        "2. ``--selfcheck``（不能有 [缺失]；本机没模型时跳过）",
+        "3. ``--ocr`` 真实收据图（必须产出 .md）",
+        "4. OCR 引擎按 pid 回收（不留孤儿进程）",
+        "",
+        "> 这份文件由 ``tools/verify_packaged.ps1`` 生成。",
+        "> 它证明的是「打包后的路径对不对」；",
+        "> ``main.py --claims`` 在源码模式证明的是「接线对不对」。两者不能互相替代。"
+    )
+    $outFile = Join-Path $root "docs\verify-latest.txt"
+    New-Item -ItemType Directory -Path (Split-Path $outFile) -Force | Out-Null
+    Set-Content -Path $outFile -Value ($lines -join "`r`n") -Encoding utf8
+    Write-Host "  记录已写入 docs\verify-latest.txt" -ForegroundColor DarkGray
+} catch {
+    Write-Host "  记录写入失败：$_" -ForegroundColor DarkGray
+}
+
 exit $(if ($fail -eq 0) { 0 } else { 1 })

@@ -116,6 +116,11 @@ class ChatPlan:
     ngl: int
     auto_fit: bool
     notes: list[str] = field(default_factory=list)
+    # KV 精度是从哪来的："config"（显式配置）/ "derive"（按显存推导）/
+    # "ram_clamp"（内存不足被压到 q4_0）。
+    # 声明断言用它判断「有没有内联抄一份逻辑」—— 只看 kv_type 会误报：
+    # 显式配置和内存压制都会合法地覆盖推导结果。
+    kv_source: str = "derive"
 
     @property
     def kv_label(self) -> str:
@@ -178,13 +183,19 @@ def plan_chat() -> ChatPlan:
     # 必须调 derive_kv，不要在这里再抄一份 if/elif：
     # 抄一份就有「门禁测的代码」和「产品跑的代码」两份，哪天只改一边，
     # claims 全绿而行为不变（或反过来）。现在两边是同一个函数。
-    kv = config.CHAT_KV or derive_kv(vram)
+    if config.CHAT_KV:
+        kv = config.CHAT_KV
+        kv_source = "config"
+    else:
+        kv = derive_kv(vram)
+        kv_source = "derive"
 
     # ---- 内存不够时主动压 ----
     if ram and model_gb and ram < model_gb * 1.5:
         if ctx > 8192:
             ctx = 8192
         kv = "q4_0"
+        kv_source = "ram_clamp"
         notes.append(f"内存 {ram} GB 偏紧（模型 {model_gb} GB），已上下文压到 {ctx}、KV 降到 q4_0")
 
     # ---- 显存装不装得下 ----
@@ -203,7 +214,7 @@ def plan_chat() -> ChatPlan:
                 f"超过显存 {vram} GB（差 {over} GB）→ 交给引擎自动决定层数"
             )
 
-    return ChatPlan(ctx=ctx, kv_type=kv, ngl=ngl, auto_fit=auto_fit, notes=notes)
+    return ChatPlan(ctx=ctx, kv_type=kv, ngl=ngl, auto_fit=auto_fit, notes=notes, kv_source=kv_source)
 
 
 def summary() -> str:
