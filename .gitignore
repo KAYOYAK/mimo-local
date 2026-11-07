@@ -1,0 +1,33 @@
+# --- 构建产物 ---
+build/
+dist/
+*.spec
+MiMoLocal.exe
+MiMoLocal-Setup.exe
+
+# --- 运行时数据（程序自己建的）---
+agent/
+logs/
+.mimocode/
+testproj/
+
+# --- 模型与引擎（太大，不进仓库）---
+assets/
+models/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- 编辑器 ---
+.vscode/
+.idea/
+*.swp
+
+# --- 系统 ---
+Thumbs.db
+desktop.ini
+.DS_Store

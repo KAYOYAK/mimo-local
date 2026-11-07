@@ -1,0 +1,13 @@
+# 统一换行符，避免 Windows/Linux 混用时整个文件显示成改动
+* text=auto eol=lf
+
+# Windows 脚本必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.exe binary
+*.dll binary
+*.gguf binary
+*.png binary
+*.jpg binary
