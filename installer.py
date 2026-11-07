@@ -86,12 +86,20 @@ def agents_path() -> Path | None:
 
 
 def make_shortcut(lnk: Path, target: Path) -> bool:
-    """用 WScript.Shell 建 .lnk（Python 标准库做不了这个）。"""
+    """用 WScript.Shell 建 .lnk（Python 标准库做不了这个）。
+
+    图标指向**独立的 app.ico 文件**，不指向 exe 资源（exe,0）。
+    原因：Windows 会缓存 exe 的图标索引，实测出现过快捷方式一直显示成
+    上一个关联程序（Python）图标的情况，删缓存也不一定马上好。
+    指向独立 .ico 文件能绕开这个缓存，而且换图标时只要替换那个文件。
+    """
+    ico = target.parent / "app.ico"
+    icon_loc = f"{ico},0" if ico.is_file() else f"{target},0"
     ps = (
         f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
         f"$s.TargetPath = '{target}';"
         f"$s.WorkingDirectory = '{target.parent}';"
-        f"$s.IconLocation = '{target},0';"
+        f"$s.IconLocation = '{icon_loc}';"
         f"$s.Description = '{APP_NAME}';"
         f"$s.Save()"
     )
@@ -104,6 +112,18 @@ def make_shortcut(lnk: Path, target: Path) -> bool:
     except Exception:
         return False
 
+
+def icon_path() -> Path | None:
+    """找打包进来的 app.ico。
+
+    PyInstaller onefile：--add-data 的内容在 sys._MEIPASS。
+    源码运行：在当前目录。
+    """
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    for cand in (base / "app.ico", base / "assets" / "app.ico"):
+        if cand.is_file():
+            return cand
+    return None
 
 def refresh_icon_cache() -> None:
     """让 Windows 重新读快捷方式的图标。
@@ -239,6 +259,11 @@ class Installer:
                        capture_output=True, timeout=10)
         shutil.copy2(src, target)
 
+        # 图标：快捷方式指向这个独立文件，不指向 exe 资源（见 make_shortcut 注释）
+        ico_src = icon_path()
+        if ico_src:
+            shutil.copy2(ico_src, INSTALL_DIR / "app.ico")
+
         a = agents_path()
         if a:
             shutil.copy2(a, INSTALL_DIR / "AGENTS.md")
@@ -292,6 +317,11 @@ def silent_install() -> int:
         print(f"已复制 -> {target}")
 
         # AGENTS.md 一起装（某些条情况下 config 会 fallback，但装一份更稳）
+        # 图标：快捷方式指向这个独立文件，不指向 exe 资源（见 make_shortcut 注释）
+        ico_src = icon_path()
+        if ico_src:
+            shutil.copy2(ico_src, INSTALL_DIR / "app.ico")
+
         a = agents_path()
         if a:
             shutil.copy2(a, INSTALL_DIR / "AGENTS.md")
