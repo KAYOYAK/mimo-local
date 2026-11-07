@@ -167,13 +167,29 @@ class Engine:
 
     @staticmethod
     def _is_our_server(port: int) -> bool:
-        """端口上的服务是不是 llama-server（别人也可能是 llama-server，但至少能区分）。"""
+        """端口上的服务是不是**我们自己的**引擎。
+
+        只判 `/props` 里有 model_path 是不够的：LM Studio、另一个 llama.cpp
+        实例都满足，于是提示变成「你上次残留了进程，去任务管理器杀」——
+        用户会杀掉一个无关的程序。必须比对它加载的模型是不是我们那个。
+        """
         try:
             import urllib.request
             import json
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/props", timeout=2) as r:
                 data = json.loads(r.read().decode("utf-8", "replace"))
-                return "model_path" in data
+        except Exception:
+            return False
+
+        if "model_path" not in data:
+            return False
+        try:
+            running = Path(str(data.get("model_path", ""))).resolve()
+            ours = config.current_model().resolve()
+            if running == ours:
+                return True
+            # 同名前缀也算（有些引擎会报软链接路径或大小写不同）
+            return running.name == ours.name
         except Exception:
             return False
 

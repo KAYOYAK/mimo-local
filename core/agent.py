@@ -86,6 +86,74 @@ CONFIG_TEMPLATE = """{
 """
 
 
+def _write_agents_md(cfg_home: Path) -> Path:
+    """生成 OCR 工具说明，路径按**当前安装位置**填。
+
+    为什么不能直接用仓库里那份静态 AGENTS.md：
+    它里面写的是 `D:\\mimo-desktop\\tools\\ocr.py`。装到
+    `%LOCALAPPDATA%\\MiMoLocal` 之后，模型会去调一个不存在的路径。
+
+    打包成 exe 后还有第二层问题：tools/ocr.py 进了压缩包，磁盘上没有这个
+    脚本了。所以 frozen 模式下改用 exe 自己的 `--ocr` 子命令。
+    """
+    frozen = getattr(sys, "frozen", False)
+    if frozen:
+        cmd = f'"{sys.executable}" --ocr'
+        read_hint = ("调用成功后，**结果已经写到图片旁边的同名 `.md` 文件**"
+                     "（`invoice.jpg` → `invoice.md`），用 read 工具读那个文件。\n"
+                     "程序是 windowed 的、没有 stdout，所以不要指望从命令输出里拿到内容。")
+    else:
+        cmd = f'python "{config.ROOT / "tools" / "ocr.py"}"'
+        read_hint = ("命令会把 Markdown 打到 stdout，同时也写一份到图片旁边的同名 "
+                     "`.md` 文件；哪个方便用哪个。")
+
+    body = f"""# 本地工具
+
+这个环境跑在纯本地的模型上，除了读写文件、执行命令，还多一个**本地图片识别**工具。
+
+## ocr —— 把图片转成 Markdown
+
+```bash
+{cmd} <图片路径>
+```
+
+可选 `--task`：
+
+| 参数 | 用途 |
+|---|---|
+| （默认 `doc`） | 整页文档 → Markdown，表格转 OTSL、公式转 LaTeX |
+| `--task text` | 只提取文字 |
+| `--task table` | 表格 → OTSL |
+| `--task formula` | 公式 → LaTeX |
+
+图片路径可以是相对的（相对当前工作目录）。
+
+{read_hint}
+
+输出的就是 Markdown 正文，不需要再解析。
+
+### 什么时候用
+
+用户提到以下内容时，先确认文件存在，然后调用这个工具：
+
+- 「这张图里写了什么」「看看这个截图」
+- 发票、收据、扫描件、书页
+- 「把这张表格转成 Markdown」
+- 「这个公式是什么」
+- 任何**以图片形式存在的文档**
+
+### 注意
+
+- 第一次调用会启动 OCR 引擎（约 4 秒），之后就快了
+- 一次只处理一张图，批量就循环调用
+- 识别结果是**原文转录**，不要自己编造内容
+- 这个工具**只能看图片**
+"""
+    target = cfg_home / "AGENTS-ocr.md"
+    target.write_text(body, encoding="utf-8")
+    return target
+
+
 def write_config(ctx: int = None, port: int = None) -> Path:
     """写 MiMo Code 的配置。每次启动都重写，保证权限和模型参数是最新的。
 
@@ -98,9 +166,13 @@ def write_config(ctx: int = None, port: int = None) -> Path:
     cfg_dir = cfg_home / "mimocode"
     cfg_dir.mkdir(parents=True, exist_ok=True)
 
-    # instructions 指向 OCR 工具说明，让模型知道有这个能力
-    instr_file = config.AGENTS_FILE
-    instructions = json.dumps([str(instr_file)]) if instr_file.exists() else "[]"
+    # instructions 指向**生成出来**的 OCR 说明（路径按当前安装位置填），
+    # 不是仓库里那份写死 D:\mimo-desktop 的静态文件。
+    try:
+        instr_file = _write_agents_md(cfg_home)
+        instructions = json.dumps([str(instr_file)])
+    except Exception:
+        instructions = "[]"
 
     body = CONFIG_TEMPLATE % {
         "instructions": instructions,
@@ -127,13 +199,20 @@ class EventStream:
     """订阅 /event 的 SSE，解析后回调。
 
     必须在独立线程里 run()。stop() 会断开连接。
+
+    断流不再是静默的：旧实现最后是 `except Exception: pass`，SSE 一断界面
+    就停止刷新而 send_message 还在阻塞 → 用户看到永久「思考中」。
+    现在异常会通过 on_error 回调报出去，界面可以提示并用 POST 返回值对账。
     """
 
-    def __init__(self, base_url: str, on_event: Callable[[Event], None]):
+    def __init__(self, base_url: str, on_event: Callable[[Event], None],
+                 on_error: Callable[[str], None] | None = None):
         self.base_url = base_url
         self.on_event = on_event
+        self.on_error = on_error
         self._stop = threading.Event()
         self._resp = None
+        self.last_event = 0.0        # 最后一次收到事件的时刻（time.time()）
 
     def run(self):
         url = f"{self.base_url}/event"
@@ -152,14 +231,20 @@ class EventStream:
                     obj = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+                self.last_event = time.time()
                 ev = self._parse(obj)
                 if ev:
                     try:
                         self.on_event(ev)
                     except Exception:
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            # 主动 stop() 会走到这里，不算错误
+            if not self._stop.is_set() and self.on_error:
+                try:
+                    self.on_error(f"事件流断开：{e}")
+                except Exception:
+                    pass
 
     def _parse(self, obj: dict) -> Event | None:
         t = obj.get("type", "")
@@ -202,6 +287,7 @@ class AgentServer:
         self._log = None
         self.events: EventStream | None = None
         self.on_event: Callable[[Event], None] | None = None
+        self.on_event_error: Callable[[str], None] | None = None
 
     @property
     def base(self) -> str:
@@ -273,7 +359,7 @@ class AgentServer:
 
         # 订阅事件流
         if self.on_event:
-            self.events = EventStream(self.base, self.on_event)
+            self.events = EventStream(self.base, self.on_event, self.on_event_error)
             self.events.start()
 
         return True

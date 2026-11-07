@@ -58,6 +58,8 @@ def main() -> int:
     ap.add_argument("--task", default="doc",
                     choices=["doc", "text", "table", "formula"],
                     help="识别任务类型（默认 doc=整页文档转 Markdown）")
+    ap.add_argument("--out", default="",
+                    help="把结果写到这个文件（打包成 exe 后没有 stdout，必须靠它）")
     args = ap.parse_args()
 
     img = Path(args.image)
@@ -70,11 +72,22 @@ def main() -> int:
     try:
         ensure_ocr_engine()
         text = client.ocr_image(config.OCR_PORT, img, args.task)
-        print(text)
-        return 0
     except Exception as e:
         print(f"识别失败：{e}", file=sys.stderr)
         return 1
+
+    print(text)
+
+    # 打包成 windowed exe 时没有 stdout —— 模型必须能从文件读到结果。
+    # 默认写到图片旁边的同名 .md，这样调用完直接 read 那个文件。
+    out = Path(args.out) if args.out else img.with_suffix(".md")
+    try:
+        out.write_text(text, encoding="utf-8")
+        print(f"\n已写入：{out}", file=sys.stderr)
+    except Exception as e:
+        print(f"写文件失败：{e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

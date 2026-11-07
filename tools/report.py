@@ -85,7 +85,7 @@ def build_report(checker=None) -> str:
         L.append(s)
 
     add("=" * 72)
-    add("  MiMo Local · 诊断报告")
+    add(f"  MiMo Local v{config.VERSION} · 诊断报告")
     add(f"  生成时间：{now.strftime('%Y-%m-%d %H:%M:%S')}")
     add("=" * 72)
     add()

@@ -55,6 +55,38 @@ def _run_cli(argv: list[str]) -> int | None:
     windowed exe 没有控制台，所以结果一律写文件，再尽力打印一份
     （源码运行时能看到输出）。
     """
+    # --ocr <图片> [--task doc|text|table|formula]
+    # 打包成 exe 后 tools/ocr.py 在压缩包里，磁盘上没有脚本文件，
+    # 模型没法 `python tools/ocr.py`。所以 exe 自己提供这个子命令。
+    if "--ocr" in argv:
+        import io
+        import contextlib
+        idx = argv.index("--ocr")
+        rest = argv[idx + 1:]
+        buf = io.StringIO()
+        try:
+            from tools import ocr as ocr_mod
+            old = sys.argv
+            sys.argv = ["ocr"] + rest
+            try:
+                with contextlib.redirect_stdout(buf):
+                    code = ocr_mod.main()
+            finally:
+                sys.argv = old
+        except Exception:
+            buf.write(traceback.format_exc())
+            code = 1
+        text = buf.getvalue()
+        _safe_print(text)
+        # windowed exe 没有 stdout，落一份文件方便模型读
+        try:
+            out = config.LOGS / "ocr-last.txt"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+        return code
+
     if "--selfcheck" in argv:
         import io
         import contextlib

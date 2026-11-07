@@ -156,7 +156,7 @@ class MainWindow(QMainWindow):
         self.items: list[Item] = []
         self._by_id: dict[str, Item] = {}
         self._dirty = False
-        self._echoes: set[str] = set()      # 用户发过的原文，用来过滤事件里的 echo
+        self._echoes: dict[str, int] = {}   # 用户发过的原文 → 剩余可吞次数
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -477,6 +477,7 @@ class MainWindow(QMainWindow):
         from core import hardware
         QMessageBox.information(
             self, "关于 MiMo Local",
+            f"MiMo Local v{config.VERSION}\n"
             "纯本地 AI 编程助手\n\n"
             f"模型    MiMo V2.6 Distill Qwen 9B（llama.cpp）\n"
             f"引擎    {config.ENGINE.name}\n"
@@ -608,11 +609,25 @@ class MainWindow(QMainWindow):
             return
 
         if ev.type == "permission.asked":
-            # 配置已预授权，理论上到不了这里。到了就兜底放行，别让它卡住
+            # 配置里已经预授权了，理论上到不了这里。到了说明兜底失败 ——
+            # 旧实现返回 0 就什么都不说，请求一直接卡到 900 秒超时，
+            # 用户只看到永久「思考中」。现在必须说出来。
             try:
                 n = self.agent.answer_pending_permissions() if self.agent else 0
                 if n:
                     self.bridge.status.emit(f"自动放行 {n} 个权限", "busy")
+                else:
+                    raw = ev.raw or {}
+                    perm = raw.get("permission", "?")
+                    pats = raw.get("patterns", [])
+                    self._add_system_text(
+                        f"⚠ 卡在权限请求上：{perm}  {pats}\n"
+                        f"   配置里本该已经预授权；这条说明兜底应答失败了。\n"
+                        f"   这一轮会一直等到超时 —— 点「停止」中断，"
+                        f"然后检查 agent 配置里的 permission 段。"
+                    )
+                    self._dirty = True
+                    self.bridge.status.emit("卡在权限", "err")
             except Exception:
                 pass
 
@@ -633,7 +648,11 @@ class MainWindow(QMainWindow):
             return
 
         # 用户消息的 echo —— 我们已经自己显示过一遍了，不要再显示
-        if step.kind == "text" and step.text.strip() in self._echoes:
+        if step.kind == "text":
+            _k = step.text.strip()
+            if self._echoes.get(_k, 0) > 0:
+                self._echoes[_k] -= 1
+                return
             return
 
         # 超长注入文本（实测见过 15090 字的 instructions 副本）——
@@ -658,10 +677,63 @@ class MainWindow(QMainWindow):
             it.tool = step.tool
             it.status = step.status
             it.args = step.args
+            # 审计：bash 命令全部落盘。配置是 bash: allow + external_directory: allow，
+            # 意味着模型能在这台机器上跑任何命令 —— 出事之后这份日志是唯一能
+            # 还原现场的东西。
+            if step.tool in ("bash", "shell", "exec") and step.args:
+                self._audit_command(step.args, step.status)
 
         self._dirty = True
 
-    # ================= 目录 / 引擎 =================
+    def _audit_command(self, args: str, status: str):
+        """把模型执行的命令记进 logs/commands.log。
+
+        为什么要有这份日志：配置里 bash 和 external_directory 都是 allow，
+        模型能在这台机器上跑任何命令、读任何目录。出问题之后（文件被改坏、
+        中文变乱码、路径被写错），这是唯一能还原「它到底执行了什么」的东西。
+        """
+        try:
+            import json
+            import time as _t
+            detail = args
+            # args 是 JSON 字符串，把 command 字段挑出来更好读
+            try:
+                obj = json.loads(args)
+                detail = obj.get("command") or args
+            except Exception:
+                pass
+            line = (f"{_t.strftime('%Y-%m-%d %H:%M:%S')}  [{status or '?'}]  "
+                    f"{str(detail)[:2000]}\n")
+            log = config.LOGS / "commands.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass    # 审计日志失败不能影响主流程
+
+    def _reconcile(self, sid: str):
+        """用消息链补齐 SSE 可能漏掉的 part。
+
+        SSE 断流（进程抖动、网络、重连）时，界面会停在半截；而 POST
+        /message 的返回值本身就是最终完整消息。所以每轮结束后拉一次消息链，
+        把没渲染过的 part 补上。流式负责「快」，这里负责「准」。
+        """
+        try:
+            msgs = ag.get_messages(self.agent, sid)
+        except Exception:
+            return
+        added = 0
+        for m in msgs:
+            for p in m.get("parts", []):
+                pid = p.get("id")
+                if pid and pid not in self._by_id:
+                    try:
+                        self._on_part(p)
+                        added += 1
+                    except Exception:
+                        pass
+        if added:
+            self._dirty = True
 
     def pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择项目目录")
@@ -723,6 +795,8 @@ class MainWindow(QMainWindow):
                 self.bridge.status.emit("启动 MiMo Code", "busy")
                 self.agent = ag.AgentServer(config.AGENT_PORT)
                 self.agent.on_event = lambda ev: self.bridge.event.emit(ev)
+                # SSE 断流要说话 —— 否则界面会永久停在「思考中」
+                self.agent.on_event_error = lambda msg: self.bridge.status.emit(msg, "err")
                 self.agent.start(
                     on_phase=lambda s: self.bridge.status.emit(s, "busy"),
                     workdir=self.workdir,
@@ -782,7 +856,8 @@ class MainWindow(QMainWindow):
             return
 
         self.input.clear()
-        self._echoes.add(text.strip())
+        _k = text.strip()
+        self._echoes[_k] = self._echoes.get(_k, 0) + 1
         u = Item("", "text", role="user")
         u.text = text
         self._add(u)
@@ -797,6 +872,9 @@ class MainWindow(QMainWindow):
                     sid = ag.create_session(self.agent, self.workdir)
                     self.session_id = sid
                 ag.send_message(self.agent, sid, text, timeout=900)
+                # 对账：SSE 可能漏事件（断流/重连），用 POST 返回值对应的消息链补齐。
+                # 流式用来「快」，这里用来「准」。
+                self._reconcile(sid)
                 self.bridge.status.emit("就绪", "ok")
             except Exception as e:
                 self._add_system_text(f"⚠ {e}")
