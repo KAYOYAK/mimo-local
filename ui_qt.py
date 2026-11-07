@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 import config
 from core import agent as ag
 from core import client
+from core.render import looks_like_payload
 from core import engine as eng
 
 # ================= 官方 token =================
@@ -171,6 +172,7 @@ class MainWindow(QMainWindow):
         self._img_uris: dict[str, bool] = {}     # 已注册进 QTextDocument 的图片
         self._session_images: dict = {}          # 会话 → 发过的图片路径
         self._session_images = self._load_session_images()
+        self._sessions_cache: list = []             # 最近一次拉到的会话列表（重命名要用 revision）
         self._expanded: set[str] = set()         # 用户手动展开的折叠块
         self._img_paths: dict[str, Path] = {}    # img_id → 原始路径（放大用）
 
@@ -317,6 +319,9 @@ class MainWindow(QMainWindow):
             f"QListWidget#convlist::item:hover {{ background: {C_CARD}; }}"
         )
         self.conv_list.itemClicked.connect(self._on_conv_clicked)
+        # 右键菜单：重命名 / 删除 / 导出
+        self.conv_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.conv_list.customContextMenuRequested.connect(self._conv_menu)
         sl.addWidget(self.conv_list)
         sl.addSpacing(14)
 
@@ -857,6 +862,136 @@ class MainWindow(QMainWindow):
 
     # ================= 会话（历史对话）=================
 
+    def _conv_menu(self, pos):
+        """会话列表右键菜单。"""
+        from PySide6.QtWidgets import QMenu
+        item = self.conv_list.itemAt(pos)
+        menu = QMenu(self)
+
+        if item is not None:
+            sid = item.data(Qt.UserRole)
+            menu.addAction("打开").triggered.connect(lambda: self._on_conv_clicked(item))
+            menu.addSeparator()
+            menu.addAction("重命名…").triggered.connect(lambda: self._rename_session(sid))
+            menu.addAction("导出为文本…").triggered.connect(lambda: self._export_session(sid))
+            menu.addSeparator()
+            act_del = menu.addAction("删除这个对话")
+            act_del.triggered.connect(lambda: self._delete_session(sid, item))
+        else:
+            menu.addAction("新建对话").triggered.connect(self.new_chat)
+            menu.addAction("刷新列表").triggered.connect(self.refresh_sessions)
+
+        menu.exec(self.conv_list.mapToGlobal(pos))
+
+    def _delete_session(self, sid: str, item):
+        title = item.text().split("\n")[0]
+        if not QMessageBox.question(
+            self, "删除对话",
+            f"确定删除「{title}」吗？\n\n这会把 MiMo Code 里的记录一起删掉，不能恢复。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) == QMessageBox.Yes:
+            return
+        if self.busy:
+            QMessageBox.information(self, "忙", "正在跑任务，等它结束再删。")
+            return
+        agent = self.agent
+        if not agent:
+            return
+
+        def work():
+            ok = ag.delete_session(agent, sid)
+            if ok:
+                # 删的是当前打开的对话 → 清空对话区
+                if sid == self.session_id:
+                    self.session_id = None
+                    self.items.clear()
+                    self._by_id.clear()
+                    self._seen.clear()
+                    self._expanded.clear()
+                    self._add(Item("welcome-del", "divider"))
+                    self._add_system_text("对话已删除。")
+                    self._dirty = True
+                    self._flush()
+                # 本地图片记录也要清
+                self._session_images.pop(sid, None)
+                self._save_session_images()
+                self.bridge.status.emit("已删除", "ok")
+            else:
+                self.bridge.status.emit("删除失败", "err")
+            self.refresh_sessions()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _rename_session(self, sid: str):
+        from PySide6.QtWidgets import QInputDialog
+        # 从当前列表里找出这一条的名字和 revision
+        cur_title, revision = "", 1
+        for s in getattr(self, "_sessions_cache", []):
+            if s.get("id") == sid:
+                cur_title = s.get("title") or ""
+                revision = s.get("titleRevision") or 1
+                break
+        new_title, ok = QInputDialog.getText(
+            self, "重命名对话", "新标题：", text=cur_title)
+        if not ok or not new_title.strip():
+            return
+        agent = self.agent
+        if not agent:
+            return
+
+        def work():
+            ok2 = ag.rename_session(agent, sid, new_title.strip(), revision)
+            self.bridge.status.emit("已重命名" if ok2 else "重命名失败", "ok" if ok2 else "err")
+            self.refresh_sessions()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _export_session(self, sid: str):
+        """把某个对话导出成文本。"""
+        from PySide6.QtWidgets import QFileDialog
+        agent = self.agent
+        if not agent:
+            return
+        f, _ = QFileDialog.getSaveFileName(
+            self, "导出对话", str(Path.home() / "mimo-conversation.txt"),
+            "文本 (*.txt);;Markdown (*.md)")
+        if not f:
+            return
+
+        def work():
+            try:
+                msgs = ag.get_messages(agent, sid)
+            except Exception as e:
+                self.bridge.status.emit(f"导出失败：{e}", "err")
+                return
+            lines = []
+            for m in msgs:
+                role = (m.get("info") or {}).get("role")
+                for p in (m.get("parts") or []):
+                    if p.get("type") != "text" or p.get("synthetic"):
+                        continue
+                    txt = (p.get("text") or "").strip()
+                    if not txt:
+                        continue
+                    if role == "user":
+                        if "【用户的问题】" in txt:
+                            seg = txt.split("【用户的问题】", 1)[1]
+                            for cut in ("【用户发的图片：", "请**直接回答", "⚠ 你无法直接查看"):
+                                i = seg.find(cut)
+                                if i > 0:
+                                    seg = seg[:i]
+                            txt = seg.strip() or "（发了一张图片）"
+                        lines.append(f"## 我\n\n{txt}")
+                    elif not looks_like_payload(txt):
+                        lines.append(f"## MiMo\n\n{txt}")
+            try:
+                Path(f).write_text("\n\n".join(lines), encoding="utf-8")
+                self.bridge.status.emit("已导出", "ok")
+            except Exception as e:
+                self.bridge.status.emit(f"写入失败：{e}", "err")
+
+        threading.Thread(target=work, daemon=True).start()
+
     def refresh_sessions(self):
         """从 MiMo Code 拉会话列表，填到侧边栏。"""
         if not self.agent or not self.workdir:
@@ -875,6 +1010,7 @@ class MainWindow(QMainWindow):
 
     def _fill_sessions(self, sessions: list):
         """主线程：把会话列表画出来。"""
+        self._sessions_cache = sessions
         self.conv_list.blockSignals(True)
         self.conv_list.clear()
         import datetime

@@ -480,6 +480,30 @@ def list_sessions(server: AgentServer, directory: Path | None = None) -> list:
     return items
 
 
+def delete_session(server: AgentServer, session_id: str) -> bool:
+    """删除一个会话。实测 DELETE /session/{id} 返回 true。"""
+    try:
+        r = server.api("DELETE", f"/session/{session_id}", timeout=20)
+        return bool(r)
+    except Exception:
+        return False
+
+
+def rename_session(server: AgentServer, session_id: str, title: str,
+                   revision: int = 1) -> bool:
+    """给会话改标题。
+
+    PATCH 要求带 expectedRevision（实测缺了会 400），
+    所以调用方要先把 session 的 titleRevision 传进来。
+    """
+    try:
+        r = server.api("PATCH", f"/session/{session_id}",
+                       {"title": title, "expectedRevision": revision}, timeout=20)
+        return bool(r)
+    except Exception:
+        return False
+
+
 def get_messages(server: AgentServer, session_id: str) -> list:
     return server.api("GET", f"/session/{session_id}/message", timeout=30) or []
 
