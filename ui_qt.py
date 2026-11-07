@@ -341,6 +341,9 @@ class MainWindow(QMainWindow):
         self.input.setPlaceholderText("说要做什么…  Enter 发送 · Shift+Enter 换行")
         self.input.setFixedHeight(84)
         self.input.installEventFilter(self)
+        # 输入框的右键菜单也得中文化 —— Qt 自带的是英文
+        self.input.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.input.customContextMenuRequested.connect(self._input_menu)
         cl.addWidget(self.input, 1)
 
         self.btn_send = QPushButton("发送", objectName="primary")
@@ -607,31 +610,121 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _input_menu(self, pos):
+        """输入框右键菜单（中文）。"""
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        cur = self.input.textCursor()
+        has_sel = cur.hasSelection()
+
+        a = menu.addAction("撤销")
+        a.setEnabled(self.input.document().isUndoAvailable())
+        a.triggered.connect(self.input.undo)
+
+        b = menu.addAction("重做")
+        b.setEnabled(self.input.document().isRedoAvailable())
+        b.triggered.connect(self.input.redo)
+
+        menu.addSeparator()
+
+        c = menu.addAction("剪切")
+        c.setEnabled(has_sel)
+        c.triggered.connect(self.input.cut)
+
+        d = menu.addAction("复制")
+        d.setEnabled(has_sel)
+        d.triggered.connect(self.input.copy)
+
+        e = menu.addAction("粘贴")
+        e.setEnabled(bool(QApplication.clipboard().text()))
+        e.triggered.connect(self.input.paste)
+
+        f = menu.addAction("删除")
+        f.setEnabled(has_sel)
+        f.triggered.connect(lambda: self.input.textCursor().removeSelectedText())
+
+        menu.addSeparator()
+
+        g = menu.addAction("全选")
+        g.triggered.connect(self.input.selectAll)
+
+        h = menu.addAction("清空输入框")
+        h.setEnabled(bool(self.input.toPlainText()))
+        h.triggered.connect(self.input.clear)
+
+        menu.exec(self.input.mapToGlobal(pos))
+
+    def _copy_last_answer(self):
+        """复制最后一条模型回答（只要正文，不含思考过程/工具调用）。"""
+        for it in reversed(self.items):
+            if it.kind == "text" and it.role != "user" and it.role != "system" and it.text.strip():
+                QApplication.clipboard().setText(it.text)
+                self.bridge.status.emit("已复制最后一条回答", "ok")
+                return
+        self.bridge.status.emit("没有可复制的回答", "err")
+
+    def _copy_last_question(self):
+        """复制最后一条我发的话。"""
+        for it in reversed(self.items):
+            if it.role == "user" and it.text.strip():
+                QApplication.clipboard().setText(it.text)
+                self.bridge.status.emit("已复制最后一条提问", "ok")
+                return
+        self.bridge.status.emit("没有可复制的提问", "err")
+
+    def _copy_all_conversation(self):
+        """复制整段对话（只含用户和模型的正文，不含思考/工具/系统消息）。"""
+        lines = []
+        for it in self.items:
+            if it.role == "user":
+                lines.append(f"【我】\n{it.text}")
+            elif it.kind == "text" and it.role not in ("user", "system") and it.text.strip():
+                lines.append(f"【AI】\n{it.text}")
+        text = "\n\n".join(lines)
+        if not text.strip():
+            self.bridge.status.emit("对话是空的", "err")
+            return
+        QApplication.clipboard().setText(text)
+        self.bridge.status.emit("已复制整段对话", "ok")
+
     def _chat_menu(self, pos):
-        """右键菜单。QTextBrowser 自带的菜单是英文的，这里全部中文化。"""
+        """聊天区右键菜单（中文）。"""
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         cur = self.chat.textCursor()
         has_sel = cur.hasSelection()
 
-        a = menu.addAction("复制")
+        a = menu.addAction("复制选中")
         a.setEnabled(has_sel)
         a.triggered.connect(self.chat.copy)
-        b = menu.addAction("全选")
-        b.triggered.connect(self.chat.selectAll)
-        menu.addSeparator()
-
-        c = menu.addAction("展开全部")
-        c.triggered.connect(self._expand_all)
-        d = menu.addAction("折叠全部")
-        d.triggered.connect(self._collapse_all)
 
         menu.addSeparator()
-        e = menu.addAction("清空对话显示")
-        e.triggered.connect(self._clear_view)
+
+        # 用户说「全选把界面上全部文字都选了」—— 所以按内容给几个精确的选项
+        b = menu.addAction("复制最后一条回答")
+        b.triggered.connect(self._copy_last_answer)
+
+        c = menu.addAction("复制最后一条提问")
+        c.triggered.connect(self._copy_last_question)
+
+        d = menu.addAction("复制整段对话")
+        d.triggered.connect(self._copy_all_conversation)
+
+        e = menu.addAction("全选（含思考与工具）")
+        e.triggered.connect(self.chat.selectAll)
+
         menu.addSeparator()
-        f = menu.addAction("保存对话为文本…")
-        f.triggered.connect(self._save_chat)
+
+        f = menu.addAction("展开全部")
+        f.triggered.connect(self._expand_all)
+        g = menu.addAction("折叠全部")
+        g.triggered.connect(self._collapse_all)
+
+        menu.addSeparator()
+        h = menu.addAction("清空对话显示")
+        h.triggered.connect(self._clear_view)
+        i = menu.addAction("保存对话为文本…")
+        i.triggered.connect(self._save_chat)
 
         menu.exec(self.chat.mapToGlobal(pos))
 
