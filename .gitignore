@@ -31,3 +31,7 @@ venv/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 运行期状态（当前模型等），不进仓库
+settings.json
+*.sha256
