@@ -1263,19 +1263,15 @@ class MainWindow(QMainWindow):
                 parts.append(f'<div style="color:{C_LINE}; margin:14px 0;">'
                              f'<hr style="border:none;border-top:1px solid {C_LINE};"></div>')
             elif it.role == "user":
-                # 我说的话在**右边**：用表格把内容推到右侧，左边留空。
-                # 不是整体分成两栏，是每条消息各自对齐
-                # （QTextBrowser 不支持 flex/float，只能靠表格实现）。
-                # 留 42% 空，最多占 58% —— 太宽就不像气泡了。
+                # 我说的话在**右边**，气泡宽度跟着内容走：
+                # 不指定 width 的表格会自适应内容宽度，再靠 align="right"
+                # 推到右边 —— 短消息就窄、长消息就宽，而不是固定占一半。
                 body = html.escape(it.text).replace(chr(10), "<br>")
                 parts.append(
-                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0"'
-                    f' style="margin:16px 0 8px 0;">'
-                    f'<tr><td width="42%"></td>'
-                    f'<td width="58%" bgcolor="#2b2b2b">'
-                    f'<table width="100%" cellpadding="10" cellspacing="0" border="0"><tr>'
-                    f'<td style="color:{C_TXT};line-height:1.65;">{body}</td>'
-                    f'</tr></table></td></tr></table>'
+                    f'<table align="right" cellpadding="10" cellspacing="0" border="0"'
+                    f' bgcolor="#2b2b2b" style="margin:14px 0 8px 0;">'
+                    f'<tr><td style="color:{C_TXT};line-height:1.65;">{body}</td></tr>'
+                    f'</table>'
                 )
             elif it.role == "system":
                 parts.append(
@@ -1330,15 +1326,12 @@ class MainWindow(QMainWindow):
                         f'<div style="margin-top:8px;color:{C_TXT};'
                         f'font-family:Consolas,monospace;font-size:12px;line-height:1.6;">'
                         f'{html.escape(it.text).replace(chr(10), "<br>")}</div>')
-                # 右对齐：左 22% 空白 + 右 78% 内容（和用户消息同一侧）
+                # 图片块和用户消息一样在**右边**，宽度跟着图片/内容走。
                 parts.append(
-                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0"'
-                    f' style="margin:8px 0 10px 0;">'
-                    f'<tr><td width="22%"></td>'
-                    f'<td width="78%" bgcolor="{C_CARD}">'
-                    f'<table width="100%" cellpadding="10" cellspacing="0" border="0"><tr>'
-                    f'<td>{img_html}{link}{body_html}</td></tr></table>'
-                    f'</td></tr></table>'
+                    f'<table align="right" cellpadding="10" cellspacing="0" border="0"'
+                    f' bgcolor="{C_CARD}" style="margin:8px 0 10px 0;">'
+                    f'<tr><td>{img_html}{link}{body_html}</td></tr>'
+                    f'</table>'
                 )
             elif it.kind == "reasoning":
                 # 思考过程：默认折叠。9B 会用英文自言自语很长一段，
