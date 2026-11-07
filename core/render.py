@@ -54,10 +54,16 @@ def decide(part: dict[str, Any], echoes: dict[str, int]) -> tuple[Step | None, s
         txt = (part.get("text") or "").strip()
         if not txt:
             return None, "空文本"
-        # 用户消息的 echo —— 我们已经自己显示过一遍了
-        if echoes.get(txt, 0) > 0:
-            echoes[txt] -= 1
-            return None, "echo（用户已显示）"
+        # 用户消息的 echo —— 我们已经自己显示过一遍了。
+        # 用**前缀匹配**而不是相等：带图片时发给模型的 payload 是
+        # 「用户输入 + OCR 全文」，而界面只显示「（看图）」或用户输入，
+        # 两者不完全相等。不这么比的话 OCR 结果会在对话里出现两次。
+        for key, n in list(echoes.items()):
+            if n <= 0 or not key:
+                continue
+            if txt == key or txt.startswith(key) or key.startswith(txt):
+                echoes[key] -= 1
+                return None, "echo（用户已显示）"
         if len(txt) > MAX_TEXT:
             txt = txt[:MAX_TEXT] + "\n…（内容过长，已截断）"
         return Step("text", txt), "正文"

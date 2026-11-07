@@ -126,7 +126,7 @@ class Bridge(QObject):
 class Item:
     """对话区里的一块内容。part 更新时按 id 找回来改。"""
 
-    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role", "_pending")
+    __slots__ = ("id", "kind", "text", "tool", "status", "args", "role", "_pending", "tool_uri")
 
     def __init__(self, id_, kind, role="assistant"):
         self.id = id_
@@ -137,6 +137,7 @@ class Item:
         self.args = ""
         self.role = role
         self._pending = None
+        self.tool_uri = ""
 
 
 class MainWindow(QMainWindow):
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
         # 再渲染一遍，用户的问题就会重复出现。
         self._seen: set[str] = set()
         self._pending_images: list[Path] = []   # 待发送的图片
+        self._img_uris: dict[str, bool] = {}     # 已注册进 QTextDocument 的图片
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -639,11 +641,48 @@ class MainWindow(QMainWindow):
         self.items.append(it)
         self._dirty = True
 
+    def _ensure_image(self, path: Path) -> str:
+        """把图片注册进 QTextDocument，返回 HTML 里用的 URI。
+
+        QTextBrowser 不认 file:// 的 <img>（安全限制 + setHtml 会重置文档），
+        必须用 document().addResource() 显式注册。注册过的缓存起来，
+        否则每次 80ms 重绘都重新解码一遍图片，界面会卡。
+        """
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QImage, QTextDocument
+
+        try:
+            p = Path(path)
+            if not p.is_file():
+                return ""
+            uri = f"mimo-img-{abs(hash(str(p)))}"
+            if uri in self._img_uris:
+                return uri
+            img = QImage(str(p))
+            if img.isNull():
+                return ""
+            # 按显示区宽度缩一下，原图 4K 截图直接塞进去会撑爆
+            max_w = 460
+            if img.width() > max_w:
+                img = img.scaledToWidth(max_w, Qt.SmoothTransformation)
+            self.chat.document().addResource(
+                QTextDocument.ImageResource, QUrl(uri), img)
+            self._img_uris[uri] = True
+            return uri
+        except Exception:
+            return ""
+
     def _flush(self):
         """把 items 渲染成 HTML。节流到 80ms 一次。"""
         if not self._dirty:
             return
         self._dirty = False
+
+        # 先把这一轮要显示的图片注册好（setHtml 会把文档内容重置，
+        # 但 document 对象还在，资源注册是挂在 document 上的）
+        for it in self.items:
+            if it.kind == "ocr" and it._pending:
+                it.tool_uri = self._ensure_image(it._pending)
 
         parts = [f'<div style="line-height:1.65;">']
         for it in self.items:
@@ -673,15 +712,22 @@ class MainWindow(QMainWindow):
                     f'<span style="color:{C_ACCENT};">{html.escape(it.tool)}</span></div>{args}'
                 )
             elif it.kind == "ocr":
-                # OCR 结果：等宽字体 + 边框感，方便对原文和复制
+                # 图片 + OCR 结果放在同一个块里：
+                # 上面是缩略图（确认发的是哪张），下面是可复制的识别原文
                 body = html.escape(it.text).replace(chr(10), "<br>")
                 head = (f'<span style="color:{C_ACCENT};font-size:11px;">'
                         f'📎 {html.escape(it.tool)}</span>')
+                img_html = ""
+                if getattr(it, "tool_uri", ""):
+                    img_html = (f'<div style="margin:8px 0 10px 0;">'
+                                f'<img src="{it.tool_uri}" style="border-radius:6px;">'
+                                f'</div>')
                 parts.append(
                     f'<div style="margin:10px 0;padding:10px 12px;'
                     f'background:{C_CARD};border-left:3px solid {C_ACCENT};'
                     f'border-radius:4px;">'
-                    f'<div style="margin-bottom:6px;">{head}</div>'
+                    f'<div style="margin-bottom:4px;">{head}</div>'
+                    f'{img_html}'
                     f'<div style="color:{C_TXT};font-family:Consolas,monospace;'
                     f'font-size:12px;line-height:1.6;">{body}</div></div>'
                 )
@@ -1068,6 +1114,14 @@ class MainWindow(QMainWindow):
                 payload = text or "看看这些图片的内容，用中文说明。"
                 if ocr_block:
                     payload = payload + ocr_block
+
+                # 关键：payload 也要记进 echo。
+                # 模型会把收到的 user message 回显到事件流里，而界面显示的
+                # 只是「（看图）」—— 不记 payload 的话，它会以正文的样式
+                # 再渲染一遍，用户会看到 OCR 结果重复两次。
+                _pk = payload.strip()
+                if _pk:
+                    self._echoes[_pk] = self._echoes.get(_pk, 0) + 1
 
                 if not sid:
                     sid = ag.create_session(self.agent, self.workdir)
