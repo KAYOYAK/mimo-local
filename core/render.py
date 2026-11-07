@@ -53,6 +53,89 @@ def looks_like_payload(text: str) -> bool:
     return hits >= 2
 
 
+# ---------- Markdown → HTML ----------
+# 模型是编程助手，回答里一定有 **粗体**、`行内代码`、```代码块```、
+# 列表。QTextBrowser 只认 HTML，所以要把这些转过去。
+# 只做最常用的几种，不追求完整 Markdown 规范。
+
+def md_to_html(text: str) -> str:
+    """把模型回答里的常见 Markdown 转成 QTextBrowser 能认的 HTML。
+
+    调用前调用方应该已经做过 html.escape —— 所以这里处理的是
+    转义后的文本（&lt; &gt; &amp; 已就位），只认 Markdown 标记。
+    """
+    import re
+
+    if not text:
+        return ""
+
+    # 1. 先把代码块（```...```）摘出来占位，免得里面的 ** ` # 被误处理
+    fences: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        code = m.group(1).rstrip("\n")
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        block = (f'<table width="100%" cellpadding="8" cellspacing="0" border="0"'
+                 f' style="margin:8px 0;"><tr><td bgcolor="#141414">'
+                 f'<pre style="color:#d4d4d8;font-family:Consolas,monospace;'
+                 f'font-size:12px;margin:0;line-height:1.5;">{escaped}</pre>'
+                 f'</td></tr></table>')
+        fences.append(block)
+        return f"\x00FENCE{len(fences) - 1}\x00"
+
+    text = re.sub(r"```[^\n]*\n(.*?)```", _stash, text, flags=re.S)
+
+    # 2. 行内代码 `xxx`
+    def _icode(m: re.Match) -> str:
+        inner = m.group(1)
+        return (f'<span style="background:#2b2b2b;color:#ff9b7f;'
+                f'font-family:Consolas,monospace;font-size:12.5px;'
+                f'padding:1px 4px;">{inner}</span>')
+
+    text = re.sub(r"`([^`\n]+)`", _icode, text)
+
+    # 3. 粗体 **xxx**（先做，避免和斜体抢）
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__([^_\n]+)__", r"<b>\1</b>", text)
+
+    # 4. 标题 # / ## / ### → 粗体大字
+    def _head(m: re.Match) -> str:
+        level = len(m.group(1))
+        size = {1: 17, 2: 15, 3: 14}.get(level, 13)
+        return (f'<div style="font-size:{size}px;font-weight:600;'
+                f'margin:10px 0 4px 0;">{m.group(2)}</div>')
+
+    text = re.sub(r"^(#{1,4})\s+(.+)$", _head, text, flags=re.M)
+
+    # 5. 无序列表 - / * / •
+    def _ul(m: re.Match) -> str:
+        return f'<div style="margin:2px 0 2px 14px;">• {m.group(1)}</div>'
+
+    text = re.sub(r"^\s*[-*•]\s+(.+)$", _ul, text, flags=re.M)
+
+    # 6. 有序列表 1. 2.
+    def _ol(m: re.Match) -> str:
+        return f'<div style="margin:2px 0 2px 14px;">{m.group(1)}. {m.group(2)}</div>'
+
+    text = re.sub(r"^\s*(\d+)[.、]\s+(.+)$", _ol, text, flags=re.M)
+
+    # 7. 引用 > xxx（注意：调用方已 escape，行首是 &gt; 不是 >）
+    def _quote(m: re.Match) -> str:
+        return (f'<div style="margin:4px 0;padding-left:10px;'
+                f'border-left:2px solid #3a3a3a;color:#a1a1aa;">{m.group(1)}</div>')
+
+    text = re.sub(r"^\s*(?:&gt;|>)\s?(.*)$", _quote, text, flags=re.M)
+
+    # 8. 换行 → <br>
+    text = text.replace("\n", "<br>")
+
+    # 9. 代码块占位换回来
+    for i, block in enumerate(fences):
+        text = text.replace(f"\x00FENCE{i}\x00", block)
+
+    return text
+
+
 def decide(part: dict[str, Any], echoes: dict[str, int]) -> tuple[Step | None, str]:
     """决定一个 part 要不要渲染。
 

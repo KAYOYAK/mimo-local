@@ -1503,7 +1503,10 @@ class MainWindow(QMainWindow):
                         f'（{nchars} 字）</span></a></div>'
                     )
             else:  # text —— AI 的回答在**左边**
-                body = html.escape(it.text).replace(chr(10), "<br>")
+                # 模型是编程助手，回答里有 Markdown（粗体/代码块/列表），
+                # 直接 escape 会显示成星号。转成 HTML 再渲染。
+                from core.render import md_to_html
+                body = md_to_html(html.escape(it.text))
                 parts.append(
                     f'<div align="left" style="color:{C_ACCENT};font-size:11px;'
                     f'margin:10px 0 2px 2px;">MiMo</div>'

@@ -411,6 +411,21 @@ def check_render(c: Checker):
     else:
         c.ok("隐藏文本 / 分隔标记 / 空内容都被正确过滤")
 
+    # Markdown 必须能渲染（模型是编程助手，回答里一定有 **粗体**、`代码`、列表）
+    try:
+        import html as _html
+        from core.render import md_to_html
+        sample = "**一共 RM 5.90**\n- 商品：CLOTH PEG\n```\nprint(1)\n```"
+        out = md_to_html(_html.escape(sample))
+        ok_md = ("<b>" in out and "•" in out and "<pre" in out
+                 and "**" not in out)
+        if ok_md:
+            c.ok("Markdown 能渲染（粗体 / 列表 / 代码块）")
+        else:
+            c.fail("Markdown 没渲染出来（回答会显示成星号）")
+    except Exception as e:
+        c.warn(f"Markdown 检查失败：{e}")
+
     # payload 复述必须被拦（模型有时把收到的 payload 当回答复述一遍）
     try:
         from core.render import looks_like_payload
