@@ -1,0 +1,29 @@
+v1.0.20: 修窗口图标 + 安装时刷新图标缓存
+
+用户反馈三处图标不一致：任务栏对（橙色）、桌面和窗口左上角不对（旧图标）。
+
+查出来是两个独立问题：
+
+## 1. 窗口左上角 = Qt 默认图标
+   ui_qt.run() 里写的是 config.ROOT / "assets" / "app.ico"。
+   打包后 ROOT 是安装目录（%LOCALAPPDATA%\MiMoLocal），
+   那里**没有 assets 子目录** —— 所以图标一直没设上。
+   （上一版加 config.ICON_FILE 时漏改了这里。）
+
+   修：_app_icon() 三级兜底
+     1. config.ICON_FILE（打包后在 _MEIPASS）
+     2. QIcon(sys.executable)  ← Windows 能从 exe 资源直接读，最可靠
+     3. None（不设，用默认）
+   同时 app.setWindowIcon + w.setWindowIcon 双保险。
+
+## 2. 桌面 = Windows 图标缓存
+   快捷方式的 IconLocation 一直是对的（指向 MiMoLocal.exe,0），
+   exe 里也有图标（ExtractAssociatedIcon 验证过），
+   但 Windows 缓存了旧图标（实测显示成 Python 图标）。
+
+   修：安装完成后跑 ie4uinit.exe -show 刷新图标缓存
+   （不删 IconCache.db —— 那要重启 explorer、会闪屏）。
+
+自检加「应用图标」3 项：文件存在、PNG 存在、ICO 结构合法
+（用 struct 解析头部和每个目录项的偏移，不依赖 Qt —— QIcon 需要
+QGuiApplication，纯 CLI 自检里创建会崩，实测踩过）。

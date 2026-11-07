@@ -1971,19 +1971,46 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
 
+def _app_icon():
+    """应用图标。优先用 assets 里的 .ico；打包后找不到就从 exe 自身提取。
+
+    为什么要有兜底：PyInstaller onefile 的 --add-data 内容解压到 _MEIPASS，
+    不在 exe 旁边。之前这里写的是 config.ROOT / "assets" / "app.ico" ——
+    打包后 ROOT 是安装目录，那里没有 assets 子目录，所以图标一直没设上，
+    窗口左上角显示的是 Qt 默认图标。
+    Windows 上 QIcon 能直接从 exe 的可执行文件资源里读图标，
+    所以 exe 自己永远是最后的可靠来源。
+    """
+    from PySide6.QtGui import QIcon
+    try:
+        p = config.ICON_FILE
+        if p.is_file():
+            ic = QIcon(str(p))
+            if not ic.isNull():
+                return ic
+    except Exception:
+        pass
+    if getattr(sys, "frozen", False):
+        try:
+            ic = QIcon(sys.executable)
+            if not ic.isNull():
+                return ic
+        except Exception:
+            pass
+    return None
+
+
 def run():
     app = QApplication(sys.argv)
     app.setApplicationName("MiMo Local")
     app.setApplicationDisplayName("MiMo Local")
-    # 窗口/任务栏图标。打包后 assets 在 exe 内部，用 config.ROOT 找；
-    # 找不到就算了，不影响运行。
-    try:
-        ico = config.ROOT / "assets" / "app.ico"
-        if ico.is_file():
-            from PySide6.QtGui import QIcon
-            app.setWindowIcon(QIcon(str(ico)))
-    except Exception:
-        pass
+
+    ic = _app_icon()
+    if ic is not None:
+        app.setWindowIcon(ic)
+
     w = MainWindow()
+    if ic is not None:
+        w.setWindowIcon(ic)      # 双保险：某些主题下 app 级不生效
     w.show()
     return app.exec()

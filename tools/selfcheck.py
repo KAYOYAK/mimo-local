@@ -206,6 +206,55 @@ def check_dirs(c: Checker):
         c.fail(f"日志目录写不进去：{e}")
 
 
+def check_icon(c: Checker):
+    """应用图标必须能被解析出来。
+
+    真实事故：窗口左上角一直是 Qt 默认的蓝色方块图标。
+    原因是 ui_qt.run() 里写的是 config.ROOT / "assets" / "app.ico"，
+    而打包后 ROOT 是安装目录，那里没有 assets 子目录。
+    """
+    c.section("应用图标")
+    try:
+        ico = config.ICON_FILE
+        if ico.is_file():
+            c.ok(f"图标文件存在（{ico.name}，{ico.stat().st_size} 字节）")
+        else:
+            c.fail(f"图标文件不存在：{ico}")
+        png = config.ICON_PNG
+        if png.is_file():
+            c.ok(f"PNG 图标存在（{png.name}）")
+        else:
+            c.warn(f"PNG 图标不存在：{png}")
+
+        # 校验 ICO 文件头（不能在这里 QIcon 加载 —— 那需要 QGuiApplication）
+        try:
+            import struct
+            raw = ico.read_bytes()
+            reserved, typ, count = struct.unpack("<HHH", raw[:6])
+            ok_hdr = (reserved == 0 and typ == 1 and 1 <= count <= 32)
+            if ok_hdr:
+                # 逐个目录项校验偏移和长度不越界
+                bad = []
+                for i in range(count):
+                    off = 6 + i * 16
+                    if off + 16 > len(raw):
+                        bad.append(i)
+                        continue
+                    _w, _h, _c, _r, _p, _b, size, data_off = struct.unpack(
+                        "<BBBBHHII", raw[off:off + 16])
+                    if data_off + size > len(raw) or size == 0:
+                        bad.append(i)
+                if bad:
+                    c.fail(f"ICO 有 {len(bad)} 个尺寸的数据越界")
+                else:
+                    c.ok(f"ICO 结构合法（{count} 个尺寸，共 {len(raw)} 字节）")
+            else:
+                c.fail(f"ICO 文件头不合法（reserved={reserved}, type={typ}, count={count}）")
+        except Exception as e:
+            c.fail(f"ICO 解析失败：{e}")
+    except Exception as e:
+        c.fail(f"图标检查出错：{e}")
+
 def check_pid_guard(c: Checker):
     """三个子进程都要有 pid 文件 + 收尸能力。
 
@@ -424,6 +473,7 @@ def main() -> int:
     check_render(c)
     check_image_input(c)
     check_dirs(c)
+    check_icon(c)
     check_pid_guard(c)
     check_ports(c)
     check_config(c)

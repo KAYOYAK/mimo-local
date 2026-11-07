@@ -21,6 +21,19 @@ APP_NAME = "MiMo Local"
 APP_EXE = "MiMoLocal.exe"
 
 
+def _no_window() -> dict:
+    """Windows 上别弹黑窗口。"""
+    if sys.platform == "win32":
+        return {
+            "creationflags": subprocess.CREATE_NO_WINDOW,
+            "startupinfo": subprocess.STARTUPINFO(
+                dwFlags=subprocess.STARTF_USESHOWWINDOW,
+                wShowWindow=subprocess.SW_HIDE,
+            ),
+        }
+    return {}
+
+
 def _read_version() -> str:
     """从 config.py 里解析版本号，而不是再写一份。
 
@@ -90,6 +103,20 @@ def make_shortcut(lnk: Path, target: Path) -> bool:
         return r.returncode == 0 and lnk.exists()
     except Exception:
         return False
+
+
+def refresh_icon_cache() -> None:
+    """让 Windows 重新读快捷方式的图标。
+
+    不删 IconCache.db（那要重启 explorer、会闪屏），用 ie4uinit -show：
+    这是 Windows 自带的「刷新图标缓存」入口，代价小、不打扰用户。
+    失败就算了 —— 图标晚一点自己会更新。
+    """
+    try:
+        subprocess.run(["ie4uinit.exe", "-show"], capture_output=True, timeout=10,
+                       **_no_window())
+    except Exception:
+        pass
 
 
 def write_uninstall_script() -> Path:
@@ -285,6 +312,13 @@ def silent_install() -> int:
         print(f"开始菜单: {'[OK]' if ok_s else '[FAIL]'}")
 
         print(f"注册表: {'[OK]' if write_uninstaller() else '[FAIL]'}")
+
+        # 刷新 Windows 图标缓存。
+        # 快捷方式其实一直指向 MiMoLocal.exe、exe 里也有图标，但 Windows
+        # 会缓存旧图标 —— 装完不刷的话桌面和开始菜单还是上一个版本的图标
+        #（实测见过显示成 Python 图标的情况）。
+        refresh_icon_cache()
+        print("图标缓存: 已刷新")
         return 0
     except Exception as e:
         print(f"失败: {e}", file=sys.stderr)
