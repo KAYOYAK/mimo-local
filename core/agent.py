@@ -450,6 +450,24 @@ def create_session(server: AgentServer, directory: Path) -> str:
     return obj["id"]
 
 
+def list_sessions(server: AgentServer, directory: Path | None = None) -> list:
+    """列出会话。返回原始的会话对象列表（含 id / title / time）。
+
+    MiMo Code 会自己给会话生成标题（titleSource = "generated" 时是真标题，
+    "fallback" 时是「Untitled」之类），界面直接用它。
+    """
+    try:
+        items = server.api("GET", "/session", timeout=20) or []
+    except Exception:
+        return []
+    if directory is not None:
+        want = str(directory).lower()
+        items = [s for s in items if str(s.get("directory", "")).lower() == want]
+    # 最近更新的排前面
+    items.sort(key=lambda s: (s.get("time") or {}).get("updated", 0), reverse=True)
+    return items
+
+
 def get_messages(server: AgentServer, session_id: str) -> list:
     return server.api("GET", f"/session/{session_id}/message", timeout=30) or []
 

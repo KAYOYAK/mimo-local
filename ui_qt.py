@@ -23,8 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import config
@@ -119,6 +120,8 @@ class Bridge(QObject):
     event = Signal(object)
     status = Signal(str, str)      # text, kind
     fatal = Signal(str)
+    sessions = Signal(object)      # 会话列表（后台线程拉到后送回主线程）
+    loaded = Signal(object)        # 历史消息（切会话时）
 
 
 # ---------- 对话项 ----------
@@ -173,6 +176,8 @@ class MainWindow(QMainWindow):
         self.bridge.event.connect(self._on_event)
         self.bridge.status.connect(self._set_status)
         self.bridge.fatal.connect(lambda m: QMessageBox.critical(self, "错误", m))
+        self.bridge.sessions.connect(self._fill_sessions)
+        self.bridge.loaded.connect(self._on_loaded)
 
         # 启动时轮转一次日志。超限才动，没超限什么也不做。
         try:
@@ -269,7 +274,44 @@ class MainWindow(QMainWindow):
         self.proj_label = QLabel("（未选择）", objectName="path")
         self.proj_label.setWordWrap(True)
         sl.addWidget(self.proj_label)
-        sl.addSpacing(16)
+        sl.addSpacing(14)
+
+        # ---------- 对话列表 ----------
+        conv_head = QWidget()
+        chl = QHBoxLayout(conv_head)
+        chl.setContentsMargins(0, 0, 0, 0)
+        chl.setSpacing(4)
+        chl.addWidget(QLabel("对话", objectName="section"))
+        chl.addStretch(1)
+        self.btn_new_chat = QPushButton("＋")
+        self.btn_new_chat.setFixedSize(20, 20)
+        self.btn_new_chat.setToolTip("新建对话")
+        self.btn_new_chat.setCursor(Qt.PointingHandCursor)
+        self.btn_new_chat.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {C_ACCENT};"
+            f" border: 1px solid {C_LINE}; border-radius: 4px; font-size: 13px;"
+            f" padding: 0; }}"
+            f"QPushButton:hover {{ border-color: {C_ACCENT}; }}"
+        )
+        self.btn_new_chat.clicked.connect(self.new_chat)
+        chl.addWidget(self.btn_new_chat)
+        sl.addWidget(conv_head)
+
+        self.conv_list = QListWidget()
+        self.conv_list.setObjectName("convlist")
+        self.conv_list.setFixedHeight(190)
+        self.conv_list.setStyleSheet(
+            f"QListWidget#convlist {{ background: {C_BG}; border: 1px solid {C_LINE};"
+            f" border-radius: 6px; outline: none; }}"
+            f"QListWidget#convlist::item {{ color: {C_TXT2}; padding: 5px 7px;"
+            f" border-bottom: 1px solid {C_LINE}; font-size: 11px; }}"
+            f"QListWidget#convlist::item:selected {{ background: {C_CARD};"
+            f" color: {C_TXT}; border-left: 2px solid {C_ACCENT}; }}"
+            f"QListWidget#convlist::item:hover {{ background: {C_CARD}; }}"
+        )
+        self.conv_list.itemClicked.connect(self._on_conv_clicked)
+        sl.addWidget(self.conv_list)
+        sl.addSpacing(14)
 
         sl.addWidget(QLabel("模型", objectName="section"))
         sl.addWidget(QLabel("MiMo 9B", objectName="value"))
@@ -769,6 +811,151 @@ class MainWindow(QMainWindow):
         # 没有 id 的（系统消息等）用内存地址 —— 同一次会话里稳定
         return f"{it.kind}-{id(it)}"
 
+    # ================= 会话（历史对话）=================
+
+    def refresh_sessions(self):
+        """从 MiMo Code 拉会话列表，填到侧边栏。"""
+        if not self.agent or not self.workdir:
+            self.conv_list.clear()
+            return
+        agent, workdir = self.agent, self.workdir
+
+        def work():
+            try:
+                ss = ag.list_sessions(agent, workdir)
+            except Exception:
+                ss = []
+            self.bridge.sessions.emit(ss)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fill_sessions(self, sessions: list):
+        """主线程：把会话列表画出来。"""
+        self.conv_list.blockSignals(True)
+        self.conv_list.clear()
+        import datetime
+        for s in sessions:
+            title = (s.get("title") or "未命名").strip()
+            if len(title) > 18:
+                title = title[:16] + "…"
+            ts = ((s.get("time") or {}).get("updated") or 0) / 1000
+            try:
+                when = datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+            except Exception:
+                when = ""
+            item = QListWidgetItem(f"{title}\n{when}")
+            item.setData(Qt.UserRole, s.get("id"))
+            item.setToolTip(s.get("title") or "")
+            self.conv_list.addItem(item)
+            if s.get("id") == self.session_id:
+                item.setSelected(True)
+                self.conv_list.setCurrentItem(item)
+        self.conv_list.blockSignals(False)
+
+    def _on_conv_clicked(self, item):
+        sid = item.data(Qt.UserRole)
+        if not sid or sid == self.session_id or self.busy:
+            return
+        self.load_session(sid)
+
+    def load_session(self, sid: str):
+        """切换到某个会话，把历史消息渲染出来。"""
+        self.session_id = sid
+        self.items.clear()
+        self._by_id.clear()
+        self._seen.clear()
+        self._expanded.clear()
+        self._add(Item("welcome-load", "divider"))
+        self._add_system_text("正在加载历史…")
+        self._dirty = True
+        self._flush()
+        self.bridge.status.emit("加载历史", "busy")
+
+        agent = self.agent
+
+        def work():
+            try:
+                msgs = ag.get_messages(agent, sid)
+            except Exception as e:
+                self.bridge.loaded.emit({"error": str(e)})
+                return
+            self.bridge.loaded.emit({"messages": msgs})
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_loaded(self, payload: dict):
+        """主线程：把历史消息铺进对话区。"""
+        self.items.clear()
+        self._by_id.clear()
+        self._seen.clear()
+        err = payload.get("error")
+        if err:
+            self._add_system_text(f"加载历史失败：{err}")
+            self.bridge.status.emit("加载失败", "err")
+            self._dirty = True
+            self._flush()
+            return
+
+        msgs = payload.get("messages") or []
+        n_user = n_ai = 0
+        for m in msgs:
+            info = m.get("info") or {}
+            role = info.get("role")
+            for p in (m.get("parts") or []):
+                ptype = p.get("type")
+                if ptype in ("step-start", "step-finish", "snapshot", "patch"):
+                    continue
+                if p.get("synthetic"):
+                    continue
+                if role == "user" and ptype == "text":
+                    txt = (p.get("text") or "").strip()
+                    if not txt:
+                        continue
+                    # 历史里的 user 消息是我们拼的 payload —— 只显示用户那一句，
+                    # 不要把 OCR 全文和【用户的问题】结构再翻出来
+                    if "【用户的问题】" in txt:
+                        seg = txt.split("【用户的问题】", 1)[1]
+                        for cut in ("【用户发的图片：", "请**直接回答", "⚠ 你无法直接查看"):
+                            i = seg.find(cut)
+                            if i > 0:
+                                seg = seg[:i]
+                        txt = seg.strip() or "（发了一张图片）"
+                    it = Item("", "text", role="user")
+                    it.text = txt
+                    self._add(it)
+                    n_user += 1
+                elif ptype == "text":
+                    txt = (p.get("text") or "").strip()
+                    if not txt:
+                        continue
+                    it = Item(p.get("id") or "", "text")
+                    it.text = txt
+                    self._add(it)
+                    n_ai += 1
+                elif ptype in ("reasoning", "tool"):
+                    self._on_part(p)
+        if n_user == 0 and n_ai == 0:
+            self._add_system_text("这个对话还没有内容。")
+        self.bridge.status.emit("就绪", "ok")
+        self._dirty = True
+        self._flush()
+
+    def new_chat(self):
+        """新建对话。"""
+        if self.busy:
+            return
+        self.session_id = None
+        self.items.clear()
+        self._by_id.clear()
+        self._seen.clear()
+        self._expanded.clear()
+        self._add(Item("welcome-new", "divider"))
+        self._add_system_text("新对话。直接说要做什么。")
+        self.bridge.status.emit("就绪", "ok")
+        self._dirty = True
+        self._flush()
+        self.refresh_sessions()
+
     # ================= 工具菜单 =================
 
     def _build_tools_menu(self):
@@ -979,10 +1166,12 @@ class MainWindow(QMainWindow):
             img = QImage(str(p))
             if img.isNull():
                 return "", ""
-            # 按显示区宽度缩一下，原图 4K 截图直接塞进去会撑爆
-            max_w = 460
-            if img.width() > max_w:
-                img = img.scaledToWidth(max_w, Qt.SmoothTransformation)
+            # 缩略图：宽度和高度都限制。只限宽度的话，竖版收据/长截图
+            # 会缩成一条竖线占满整个窗口，把对话全挤出去。
+            max_w, max_h = 420, 260
+            if img.width() > max_w or img.height() > max_h:
+                img = img.scaled(max_w, max_h, Qt.KeepAspectRatio,
+                                 Qt.SmoothTransformation)
             self.chat.document().addResource(
                 QTextDocument.ImageResource, QUrl(uri), img)
             self._img_uris[uri] = True
@@ -1057,8 +1246,9 @@ class MainWindow(QMainWindow):
                         f'<div style="margin:6px 0;font-size:12px;">{head}</div>'
                     )
             elif it.kind == "ocr":
-                # 图片块：缩略图始终显示（确认发的是哪张），
-                # OCR 全文默认折叠 —— 用户要看的是回答，不是识别原文刷屏。
+                # 用户发的图片 —— 和用户消息一样在**右边**。
+                # 缩略图默认显示（确认发的是哪张），OCR 全文默认折叠
+                # —— 用户要看的是回答，不是识别原文刷屏。
                 key = self._fold_key(it)
                 open_ = key in self._expanded
                 arrow = "▼" if open_ else "▶"
@@ -1067,7 +1257,7 @@ class MainWindow(QMainWindow):
                 if it.tool_uri:
                     tag = (f'<a href="zoom:{it.tool_img_id}" style="text-decoration:none;">'
                            f'<img src="{it.tool_uri}" style="border-radius:6px;"></a>')
-                    img_html = f'<div style="margin:8px 0 8px 0;">{tag}</div>'
+                    img_html = f'<div style="margin:0 0 8px 0;">{tag}</div>'
                 link = (f'<a href="fold:{key}" style="text-decoration:none;color:{C_ACCENT};'
                         f'font-size:11px;">{arrow} 📎 {html.escape(it.tool)}'
                         f' <span style="color:{C_TXT3};">（OCR {nchars} 字，点开看全文）</span></a>')
@@ -1077,11 +1267,15 @@ class MainWindow(QMainWindow):
                         f'<div style="margin-top:8px;color:{C_TXT};'
                         f'font-family:Consolas,monospace;font-size:12px;line-height:1.6;">'
                         f'{html.escape(it.text).replace(chr(10), "<br>")}</div>')
+                # 右对齐：左 22% 空白 + 右 78% 内容（和用户消息同一侧）
                 parts.append(
-                    f'<div style="margin:10px 0;padding:10px 12px;'
-                    f'background:{C_CARD};border-left:3px solid {C_ACCENT};'
-                    f'border-radius:4px;">'
-                    f'{img_html}{link}{body_html}</div>'
+                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0"'
+                    f' style="margin:8px 0 10px 0;">'
+                    f'<tr><td width="22%"></td>'
+                    f'<td width="78%" bgcolor="{C_CARD}">'
+                    f'<table width="100%" cellpadding="10" cellspacing="0" border="0"><tr>'
+                    f'<td>{img_html}{link}{body_html}</td></tr></table>'
+                    f'</td></tr></table>'
                 )
             elif it.kind == "reasoning":
                 # 思考过程：默认折叠。9B 会用英文自言自语很长一段，
@@ -1327,6 +1521,7 @@ class MainWindow(QMainWindow):
         self._seen.clear()      # 换项目后 echo 计数要清，否则会串
         self._add(Item("welcome2", "divider"))
         self._add_system_text(f"项目目录：{self.workdir}")
+        self.refresh_sessions()
 
     def toggle_engine(self):
         if self.chat_engine and self.chat_engine.running:
@@ -1386,6 +1581,8 @@ class MainWindow(QMainWindow):
                 ocr_tag = "OCR 在线" if self.ocr_live else "OCR 按需"
                 self.ctx_label.setText(f"上下文 {ctx // 1024}K\n9B + {ocr_tag}\n全本地推理")
                 self.btn_engine.setText("停止引擎")
+                # 把已有的历史对话列出来
+                self.refresh_sessions()
             except Exception as e:
                 self.bridge.status.emit("启动失败", "err")
                 self.btn_engine.setText("启动引擎")
@@ -1505,6 +1702,7 @@ class MainWindow(QMainWindow):
                 # 对账：SSE 可能漏事件（断流/重连），用 POST 返回值对应的消息链补齐。
                 # 流式用来「快」，这里用来「准」。
                 self._reconcile(sid)
+                self.refresh_sessions()   # 标题/更新时间会变
                 self.bridge.status.emit("就绪", "ok")
             except Exception as e:
                 self._add_system_text(f"⚠ {e}")
