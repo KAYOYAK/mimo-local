@@ -12,7 +12,11 @@ logs/
 testproj/
 
 # --- 模型与引擎（太大，不进仓库）---
-assets/
+assets/*
+# 图标例外：几 KB，README 和打包都要用
+!assets/app.ico
+!assets/app.png
+!assets/square-terminal.svg
 models/
 
 # --- Python ---
