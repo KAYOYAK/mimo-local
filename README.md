@@ -3,14 +3,32 @@
 > 完全本地的 AI 编程助手：**MiMo Code + MiMo 9B + Xiaomi-OCR-0**，三个能力同时在线。
 > 不联网，不需要账号，所有数据在本机。
 
-![MiMo Local](docs/screenshot.png)
-
-<p align="center"><i>发一张收据图，问「一共多少钱？买了什么？」——
-界面自己跑 OCR，缩略图和识别原文就在对话里，模型基于全文回答。</i></p>
+![演示：发一张收据图，界面自己跑 OCR，缩略图和识别原文进对话，模型基于全文回答](docs/demo.gif)
 
 一个 Windows 桌面程序。打开就是编程界面，模型跑在本地显卡上，
 需要看图时点左下角「图片」—— OCR 出来的文字直接成为模型的依据，
 不需要切换模式，也不需要切窗口。
+
+<p align="center"><i>动图：输入问题 → 选图 → 界面跑 OCR → 模型基于识别结果回答</i></p>
+
+---
+
+## 界面
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshot.png" alt="看图问答"><br>
+<b>看图问答</b><br>发一张收据，OCR 结果是模型的事实依据，不是让它转述</td>
+<td width="50%"><img src="docs/shot-code.png" alt="写代码"><br>
+<b>写代码</b><br>Markdown 代码块、粗体、列表都正确渲染</td>
+</tr>
+<tr>
+<td><img src="docs/shot-tools.png" alt="工具调用"><br>
+<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠，不刷屏</td>
+<td><img src="docs/shot-history.png" alt="多轮对话"><br>
+<b>多轮对话</b><br>每个对话独立 session，上下文互不干扰</td>
+</tr>
+</table>
 
 ---
 
@@ -25,17 +43,20 @@
 | **Xiaomi-OCR-0** | 文档识别，作为工具挂在模型手里 | 8090 |
 
 关键点：**OCR 不是一个独立的 Tab，是模型能调用的一个工具。**
-你说「看看这张发票多少钱」，它自己会去调 OCR，然后拿结果回答你。
+
+你点「图片」发一张图，界面先把 OCR 跑完（结果贴进对话，你能看到原文），
+再把识别文字当成事实依据交给模型 —— 它基于这段文字回答，不是转述。
 
 ```
-你：读一下 invoice.jpg 告诉我总金额
+你：这张收据多少钱？
    ↓
-MiMo Code 判断意图 → 调 bash → python tools/ocr.py invoice.jpg
+界面跑 OCR（1.5 秒）→ 缩略图 + 折叠的识别原文进对话
    ↓
-Xiaomi-OCR-0 识别 → 返回 Markdown
-   ↓
-9B 模型理解 → 回答「5.90」
+同时把识别文字拼进请求 → 9B 模型基于全文回答「RM 5.90，买的是 CLOTH PEG」
 ```
+
+模型需要自己读文件、跑命令时，走的是 MiMo Code 的工具调用（bash / read / edit / glob）。
+每一步都是可折叠的，不展开就看不到，不会把回答挤走。
 
 ---
 

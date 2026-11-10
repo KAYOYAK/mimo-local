@@ -74,11 +74,13 @@ def md_to_html(text: str) -> str:
 
     def _stash(m: re.Match) -> str:
         code = m.group(1).rstrip("\n")
-        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # ⚠ 不要再 escape：调用方已经做过 html.escape，代码里的 < > & 已经是
+        # &lt; &gt; &amp;。再 escape 一次会变成 &amp;lt;，界面上就显示成
+        # 字面的 "&lt;" —— 实测代码块里的 -> 和 <= 全部显示错误。
         block = (f'<table width="100%" cellpadding="8" cellspacing="0" border="0"'
                  f' style="margin:8px 0;"><tr><td bgcolor="#141414">'
                  f'<pre style="color:#d4d4d8;font-family:Consolas,monospace;'
-                 f'font-size:12px;margin:0;line-height:1.5;">{escaped}</pre>'
+                 f'font-size:12px;margin:0;line-height:1.5;">{code}</pre>'
                  f'</td></tr></table>')
         fences.append(block)
         return f"\x00FENCE{len(fences) - 1}\x00"
