@@ -2,6 +2,9 @@
 build/
 dist/
 *.spec
+# 例外：这两个是打包配置，必须进仓库才能重建 exe
+!MiMoLocal.spec
+!MiMoLocal-Setup.spec
 MiMoLocal.exe
 MiMoLocal-Setup.exe
 
