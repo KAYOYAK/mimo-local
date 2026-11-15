@@ -245,6 +245,44 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_statusbar()
+        self._apply_dark_frame()
+
+    def _apply_dark_frame(self):
+        """把 Windows 的标题栏也变深色。
+
+        不做这个的话：内容区是深色（chat-demo），标题栏是系统浅色，
+        中间一条亮边，新旧 UI 割裂得很明显。
+        """
+        import sys as _sys
+
+        if _sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+            # DWMWA_USE_IMMERSIVE_DARK_MODE = 20（Win10 20H1+；老系统是 19）
+            for attr in (20, 19):
+                value = ctypes.c_int(1)
+                r = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)
+                )
+                if r == 0:
+                    break
+            # 标题栏文字/边框颜色跟随深色（Win11 才支持，失败无所谓）
+            try:
+                caption = ctypes.c_int(0x00141414)      # #141414 -> 0x00BBGGRR
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 35, ctypes.byref(caption), ctypes.sizeof(caption)
+                )
+                border = ctypes.c_int(0x002e2e2e)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 34, ctypes.byref(border), ctypes.sizeof(border)
+                )
+            except Exception:                      # noqa: BLE001
+                pass
+        except Exception:                          # noqa: BLE001
+            pass
 
     def _build_statusbar(self):
         """状态栏：chat-demo 里没有、但必须让用户看得见的三样东西。
@@ -256,7 +294,7 @@ class MainWindow(QMainWindow):
 
         sb = self.statusBar()
         sb.setStyleSheet(
-            "QStatusBar { background:#141414; color:#86868b; border-top:1px solid #2e2e2e; }"
+            "QStatusBar { background:#141414; color:#86868b; border-top:1px solid #232326; }"
             "QStatusBar QLabel { color:#86868b; padding:0 8px; font-size:12px; }"
         )
         sb.setSizeGripEnabled(False)
@@ -288,7 +326,7 @@ class MainWindow(QMainWindow):
 
         mb = self.menuBar()
         mb.setStyleSheet(
-            "QMenuBar { background:#141414; color:#f4f4f5; padding:2px 4px; }"
+            "QMenuBar { background:#141414; color:#e8e8ea; padding:2px 4px; border-bottom:1px solid #232326; }"
             "QMenuBar::item { padding:4px 10px; }"
             "QMenuBar::item:selected { background:#282828; border-radius:4px; }"
             "QMenu { background:#1f1f1f; color:#f4f4f5; border:1px solid #2e2e2e; padding:4px; }"
