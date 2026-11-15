@@ -163,10 +163,7 @@ class WebPanel(QWidget):
             print(f"[ui_web] 桥启动失败：{exc}")
             self._bridge = None
 
-    def _emit_usage(self, used: int, out: int) -> None:
-        """桥的回调（HTTP 线程）→ 发信号（Qt 线程）。"""
-        self.usage_changed.emit(used, out)
-
+        # ---------- WebView（属于 __init__，别挪到别的方法里）----------
         view = QWebView(None)
         self._view = view
         # QWebView 是 QWindow 子类（QtWebView 走 QML 那套），不能直接塞进
@@ -178,18 +175,36 @@ class WebPanel(QWidget):
         lay.addWidget(container, 1)
         view.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
 
+        # 构造时窗口还没有真实尺寸，先同步一次；之后靠 resizeEvent。
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._sync_view_size)
+
+    def _emit_usage(self, used: int, out: int) -> None:
+        """桥的回调（HTTP 线程）→ 发信号（Qt 线程）。"""
+        self.usage_changed.emit(used, out)
+
     # ---------- 尺寸同步 ----------
-    # createWindowContainer 里的 QWindow 不会自动跟着 QWidget 缩放：
-    # 窗口最大化后 WebView 内容仍停在旧尺寸，右边和下边露出空白。
-    # 显式把几何同步过去。
-    def resizeEvent(self, event):                    # noqa: N802
-        super().resizeEvent(event)
+    # createWindowContainer 里的 QWindow**不会**自动跟随父 widget。
+    # 不同步的后果不是「内容偏小」，而是**整块区域全黑**：
+    # QWindow 停留在 0x0，WebView2 无从渲染。
+    def _sync_view_size(self) -> None:
         cont = getattr(self, "_container", None)
         view = getattr(self, "_view", None)
-        if cont is not None:
-            cont.setGeometry(0, 0, self.width(), self.height())
-            if view is not None:
-                view.setGeometry(0, 0, self.width(), self.height())
+        if cont is None or view is None:
+            return
+        # 以 container 实际拿到的区域为准（布局已经算好），不要用 self 的尺寸
+        w, h = max(1, cont.width()), max(1, cont.height())
+        if view.width() != w or view.height() != h:
+            view.resize(w, h)
+
+    def resizeEvent(self, event):                    # noqa: N802
+        super().resizeEvent(event)
+        self._sync_view_size()
+
+    def showEvent(self, event):                      # noqa: N802
+        super().showEvent(event)
+        self._sync_view_size()
 
     # ---------- 生命周期 ----------
 
