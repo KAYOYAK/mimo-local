@@ -86,16 +86,9 @@
 
 ## 三个引擎在同一个界面里
 
-聊天、工具调用、看图都在聊天界面里发生，不需要切界面：
+不用切界面，聊天、工具调用、看图都在这里发生：
 
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshot.png" alt="看图问答"><br>
-<b>图片 → OCR</b><br>发一张收据，OCR 结果进对话当事实依据</td>
-<td width="50%"><img src="docs/shot-tools.png" alt="工具调用"><br>
-<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠</td>
-</tr>
-</table>
+![工具调用：模型自己 read 了三个文件，每个调用一行 ✓，然后基于内容回答](docs/shot-three-tools.png)
 
 顶栏菜单里还有自检：
 

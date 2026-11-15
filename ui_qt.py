@@ -218,14 +218,7 @@ class MainWindow(QMainWindow):
     # ================= 构建 =================
 
     def _wrap_web_panel(self):
-        """主界面 = chat-demo，功能走菜单栏。
-
-        1.0.x 那套 PySide6 界面保留在 stack 的第 0 页（万一 Web 层出问题
-        还能从菜单切回去救急），但**不再作为主界面**：三个引擎的能力
-        （聊天 / 工具调用 / OCR）在聊天界面里已经全通了。
-        """
-        from PySide6.QtWidgets import QStackedWidget
-
+        """主界面 = chat-demo。旧 PySide6 界面已移除。"""
         try:
             from ui_web import WebPanel
         except Exception as exc:                      # noqa: BLE001
@@ -233,22 +226,22 @@ class MainWindow(QMainWindow):
             print(f"[webui] 聊天界面不可用：{exc}")
             return
 
+        # _build() 建的控件还被 _flush / _on_event / 菜单回调引用着
+        # （它们不显示，但方法里会 self.chat_view.setText(...) 之类），
+        # 所以不能直接销毁 —— 摘下来留个引用，避免空指针。
         old = self.centralWidget()
-        self.stack = QStackedWidget()
-        self.stack.addWidget(old)                     # 0：旧 PySide6 界面（备用）
+        self._old_ui = old
+        if old is not None:
+            old.setParent(None)
+            old.hide()
+
         self.web_panel = WebPanel()
-        self.stack.addWidget(self.web_panel)          # 1：chat-demo
-        self.setCentralWidget(self.stack)
-        self.stack.setCurrentIndex(1)                 # 默认就是它
+        self.setCentralWidget(self.web_panel)
 
         self._build_menu()
 
     def _build_menu(self):
-        """菜单栏：把原来藏在 `⋯` 里的功能挪到窗口顶部。
-
-        聊天界面的 Web 层不提供这些入口（自检、诊断、换模型都是桌面侧
-        的能力），所以放在 Qt 的 menubar 上最省事，也不需要改前端。
-        """
+        """菜单栏：自检、诊断、换模型这些桌面侧能力。"""
         from PySide6.QtGui import QAction
 
         mb = self.menuBar()
@@ -276,22 +269,11 @@ class MainWindow(QMainWindow):
             act = QAction(label, self)
             act.triggered.connect(slot)
             m_tool.addAction(act)
-        m_tool.addSeparator()
-        act = QAction("打开旧界面（备用）", self)
-        act.triggered.connect(lambda: self.stack.setCurrentIndex(0))
-        m_tool.addAction(act)
 
         m_help = mb.addMenu("帮助")
         act = QAction("关于 MiMo Local", self)
         act.triggered.connect(self.show_about)
         m_help.addAction(act)
-
-    def _toggle_view(self):
-        """聊天 <-> 旧界面 切换（菜单里的「打开旧界面」用）。"""
-        if not hasattr(self, "stack"):
-            return
-        web_now = self.stack.currentIndex() == 1
-        self.stack.setCurrentIndex(0 if web_now else 1)
 
     def _build(self):
         root = QWidget()
