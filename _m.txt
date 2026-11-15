@@ -1,0 +1,53 @@
+feat: 聊天界面接上 MiMo Code —— 三个引擎真正同时在线
+
+## 问题
+
+之前聊天界面直连 llama-server(8080)，只有纯 9B：
+工具调用、OCR 全用不上。而编程界面才连 MiMo Code(4096)。
+两个界面各用一半能力，所谓「三个同时在线」在界面上根本没体现。
+
+## 根因
+
+两边协议不通：
+  chat-demo 要 Anthropic 格式   POST /v1/messages + SSE
+  MiMo Code 是 session API      POST /session/{id}/message + GET /event
+
+## 解法：core/agent_bridge.py（协议翻译层，约 400 行）
+
+    chat-demo --Anthropic--> 桥(8766) --session API--> MiMo Code(4096)
+                                                         |-> 9B (8080)
+                                                         |-> OCR (8090)
+
+事件映射：
+  message.part.updated + type=text      -> content_block_delta(text_delta)
+                        type=reasoning  -> content_block_delta(thinking_delta)
+                        type=tool       -> 转成文本 "OK bash {...}"
+  session.status=idle                   -> message_delta + message_stop
+
+## 排查中踩的四个坑
+
+1. **上下文溢出**：测试时 9B 只给了 8K 上下文，而 MiMo Code 的系统提示
+   +工具定义就占 26560 tokens，报 ContextOverflowError:
+   Session too large to compact —— 模型一个字都不回。必须 64K。
+
+2. **模型回答不在 send_message 返回值里**，而是在 /event 的
+   message.part.updated 里（返回值只有 info + 空 parts 的兜底）。
+   一开始只盯返回值，以为没回答。
+
+3. **要过滤 3 类 part**，否则前端满屏噪音：
+   - 用户消息回显（text == 发出去的原文）
+   - 系统注入（synthetic=true，含 memory 路径/instructions）
+   - system-reminder 开头的 checkpoint-writer 提示（synthetic 是 None！）
+
+4. **SSE 收尾必须断连接**：不 close 的话 chat-demo 的 fetch 流永远等不到
+   EOF，300 秒后才超时。实测 320s -> 20s 就是 close_connection 这一行。
+
+## 效果
+
+问「列出当前目录下有哪些文件」：
+
+    OK bash {"command": "ls -la", ...}
+    OK bash {"command": "Get-ChildItem", ...}
+    当前工作目录下有 hello.txt、main.py、README.md
+
+工具调用可见，模型基于工具结果回答 —— 这才是三个引擎同时在线。
