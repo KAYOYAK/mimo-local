@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MiMo Local")
-        self.resize(1180, 800)
+        self.resize(1400, 900)
         self.setStyleSheet(QSS)
 
         self.chat_engine: eng.Engine | None = None

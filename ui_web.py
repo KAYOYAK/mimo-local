@@ -166,8 +166,22 @@ class WebPanel(QWidget):
         from PySide6.QtWidgets import QWidget
 
         container = QWidget.createWindowContainer(view, self)
+        self._container = container
         lay.addWidget(container, 1)
         view.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
+
+    # ---------- 尺寸同步 ----------
+    # createWindowContainer 里的 QWindow 不会自动跟着 QWidget 缩放：
+    # 窗口最大化后 WebView 内容仍停在旧尺寸，右边和下边露出空白。
+    # 显式把几何同步过去。
+    def resizeEvent(self, event):                    # noqa: N802
+        super().resizeEvent(event)
+        cont = getattr(self, "_container", None)
+        view = getattr(self, "_view", None)
+        if cont is not None:
+            cont.setGeometry(0, 0, self.width(), self.height())
+            if view is not None:
+                view.setGeometry(0, 0, self.width(), self.height())
 
     # ---------- 生命周期 ----------
 
