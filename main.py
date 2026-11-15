@@ -55,6 +55,28 @@ def _run_cli(argv: list[str]) -> int | None:
     windowed exe 没有控制台，所以结果一律写文件，再尽力打印一份
     （源码运行时能看到输出）。
     """
+    # --version / -V：只报版本号，不启动界面。
+    # 不加这个分支的话 `MiMoLocal.exe --version` 会被当成普通启动，
+    # 直接把 GUI 拉起来 —— 在脚本里调用时很难察觉。
+    if "--version" in argv or "-V" in argv:
+        import platform
+
+        from config import VERSION
+
+        lines = [
+            f"MiMo Local {VERSION}",
+            f"Python {platform.python_version()}",
+        ]
+        for line in lines:
+            _safe_print(line)
+        try:
+            out = config.LOGS / "version.txt"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("\n".join(lines), encoding="utf-8")
+        except Exception:                          # noqa: BLE001
+            pass
+        return 0
+
     # --ocr <图片> [--task doc|text|table|formula]
     # 打包成 exe 后 tools/ocr.py 在压缩包里，磁盘上没有脚本文件，
     # 模型没法 `python tools/ocr.py`。所以 exe 自己提供这个子命令。

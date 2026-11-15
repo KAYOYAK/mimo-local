@@ -1,0 +1,11 @@
+feat: --version 只报版本，不再拉起 GUI
+
+之前 `MiMoLocal.exe --version` 不被识别，走普通启动分支把界面拉起来了。
+在脚本里调用时很难察觉（windowed exe 没控制台，看不到任何输出）。
+
+现在：
+
+    MiMo Local 1.2.1
+    Python 3.14.8
+
+同时落一份 logs/version.txt（windowed exe 没 stdout，和 --ocr 一样的处理）。
