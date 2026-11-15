@@ -93,6 +93,10 @@ def add_image(w, img: Path, ocr_text: str):
 
 
 def shot(w, name: str):
+    # 集成 Web 前端后 MainWindow 默认停在聊天页（stack index 1），
+    # 截图必须切回编程页（index 0），否则 grab 到的是空白的 WebView。
+    if hasattr(w, "stack"):
+        w.stack.setCurrentIndex(0)
     w._dirty = True
     w._flush()
     w.chat.verticalScrollBar().setValue(0)

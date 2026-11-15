@@ -4,7 +4,7 @@ MiMo Local — 主窗口（PySide6）。
 视觉严格对齐官方 Xiaomi MiMo Desktop 的暗色 token：
     bg #181818 / side #141414 / composer #1f1f1f / line #2e2e2e
     txt #f4f4f5 / txt2 #86868b / txt3 #636366
-    accent #ff6a2b（橙）  danger #ff9b7f
+    accent #FF6900（小米橙）  danger #ff9b7f
     radius 8 / 12 / 16
 
 流式：订阅 mimo serve 的 /event SSE，收到 message.part.updated 就重绘。
@@ -43,8 +43,8 @@ C_LINE     = "#2e2e2e"
 C_TXT      = "#f4f4f5"
 C_TXT2     = "#86868b"
 C_TXT3     = "#636366"
-C_ACCENT   = "#ff6a2b"
-C_ACCENT2  = "#ff8352"
+C_ACCENT   = "#FF6900"   # 小米品牌橙，和 web 前端 #FF6900 保持一致
+C_ACCENT2  = "#FF8534"   # hover 状态（同色相提亮）
 C_OK       = "#4ade80"
 C_WARN     = "#fbbf24"
 C_ERR      = "#ff9b7f"

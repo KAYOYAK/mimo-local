@@ -77,6 +77,10 @@ QApplication.processEvents()
 # 150% DPI 下 w.grab() 返回 2160x1380，但实际内容只画在左上角
 # 1440x920 那块（Qt 的 grab 没跟着缩放）。所以**裁剪**左上角，
 # 不是缩放整张图 —— 缩放会把内容压成 2/3 大小，四周全是黑的。
+# 默认停在聊天页，切回编程页再截
+if hasattr(w, "stack"):
+    w.stack.setCurrentIndex(0)
+QApplication.processEvents()
 main_img = w.grab().toImage()
 print(f"grab 尺寸 {main_img.width()}x{main_img.height()}")
 if main_img.width() > W or main_img.height() > H:

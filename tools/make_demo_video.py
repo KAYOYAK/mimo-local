@@ -95,6 +95,9 @@ def build_window():
 
 def capture(w, n: int = 1):
     """连续抓 n 帧（内容不变时用来拖时间）。"""
+    # 集成 Web 前端后默认停在聊天页，动画要的是编程页
+    if hasattr(w, "stack"):
+        w.stack.setCurrentIndex(0)
     for _ in range(n):
         w._dirty = True
         w._flush()
