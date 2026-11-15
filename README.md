@@ -351,22 +351,10 @@ chat-demo --Anthropic--> 桥(8766) --session API--> MiMo Code(4096)
 
 桥只监听 `127.0.0.1`，不对外。
 
-#### 停止按钮怎么真正停下来
+#### 停止按钮
 
-chat-demo 的停止按钮只做 `AbortController.abort()`——**断前端 fetch，
-后端完全不知道**。旧界面的 `stop_round()` 会调 MiMo Code 的
-`/session/{id}/abort`，这个能力不能丢。
-
-桥的做法：写 SSE 失败（`BrokenPipe` / `ConnectionReset`）就是用户在按停止，
-**当场**调 abort。必须当场 —— `send_message` 是阻塞的（最长 900 秒），
-等它返回再 abort 等于没中断。
-
-实测（发长任务 → 读 4 个事件 → 硬断）：
-
-```
-[bridge] 中断 用户中断: 成功
-session busy=False  消息数=3        <- 后端确实停了
-```
+点停止会**真的中断后端**，不只是断前端。桥把「SSE 写入失败」当作停止信号，
+当场调 MiMo Code 的 `/session/{id}/abort`。
 
 关于 `AGENTS-ocr.md`：模型不是天生知道有 OCR 的。这份文件在每次启动时**按当前
 安装位置生成**（`core/agent.py::_write_agents_md`），然后通过 MiMo Code 的
@@ -378,69 +366,27 @@ session busy=False  消息数=3        <- 后端确实停了
 
 ---
 
-## 自检与断言
+## 自检 / 断言 / 测试
 
-### 桥的回归测试
-
-桥（`core/agent_bridge.py`）是最容易出错的一层——协议翻译、会话映射、
-中断接管都在这里。三个场景各自对应一个真踩过的坑：
+三个都是只读的，随时可以跑：
 
 ```bash
-python tools/test_bridge.py              # 三个都跑
-python tools/test_bridge.py -s multi     # 只跑一个
+python main.py --selfcheck          # 环境检查
+python main.py --claims             # 文档承诺 vs 代码
+python tools/test_bridge.py         # 桥的回归测试
 ```
 
-| 场景 | 验什么 | 当时的坑 |
-|---|---|---|
-| `single` | 工具调用能穿过桥 | part→block 映射写错，工具调用静默消失 |
-| `multi` | 第 2 轮记得上文 | session key 带 `len(messages)`，每轮新建 → 失忆 |
-| `ocr` | 图片 OCR 进了上下文 | 桥收到 image block 却没跑 OCR，模型说「没有图片」 |
-| `abort` | 断连后后端真停 | 只断前端 fetch，9B 继续烧 GPU |
+- **自检** —— 路径、引擎、模型、硬件、渲染管线、端口、配置，共 45 项。
+  它真的读文件、查版本、试端口、喂假数据验证渲染，不是「能不能启动」那种敷衍检查。
+- **断言** —— 本文档的每一条承诺是否被代码兑现。比如「说不联网」
+  → 断言 agent 的 `web/webfetch` 是 `deny`；「说显存低会自动降级」
+  → 断言 `derive_ctx` 每档边界都对。不符时要么改代码，要么改文档。
+- **桥的测试** —— 工具调用 / 多轮上下文 / 图片 OCR / 中断，四个场景。
+  改 `core/agent_bridge.py` 之后跑一下。
 
-实测 6/6：
+菜单栏的**工具**里也有前两个入口 —— 只能靠命令行跑的工具，实际上没人跑。
 
-```
-OK single/工具调用可见      🔧 ✓ bash {"command": "echo MIMO_TOOL_OK_9917"}
-OK single/命令输出回来
-OK multi/第 2 轮记得上文    回答：7429
-OK multi/新对话是隔离的     回答：4
-OK ocr/识别结果进了上下文    命中 ['MR. D.I.Y.', '5.90', 'CLOTH PEG']
-OK abort/后端已停          busy=False
-```
-
-**两个写测试时踩的坑**，以后改桥注意：
-
-1. **任务要选「不调工具就猜不到」的。** 问「列出目录下有哪些文件」，
-   模型会直接从上下文答出来，测不到工具调用映射。改成
-   `echo MIMO_TOOL_OK_9917` 才有效。
-2. **检查工具调用要看 `thinking_delta`。** 它折叠在「思考过程」里，
-   只读 `text_delta` 会把「工具跑了」判成 FAIL。
-
-### 自检与断言
-
-两个都是只读的，随时可以跑：
-
-```bash
-python main.py --selfcheck   # 路径、引擎、模型、硬件、渲染管线、端口、配置
-python main.py --claims      # 本文档的承诺是否被代码兑现
-```
-
-菜单栏的**工具**里也有这两个入口 —— 一个只能靠命令行跑的工具，实际上没人跑。
-
-自检不是「程序能启动吗」那种敷衍检查。它**真的读文件、查版本、试端口、验证渲染管线**：
-
-![自检输出：11 个分类 45 项全部 [OK]，包括引擎版本、模型指纹、显存推导、渲染管线、图标结构、子进程收尸、端口占用](docs/shot-selfcheck.png)
-
-其中「渲染管线」那几项是这么来的：曾经有一次改动让**所有正文都不显示**——
-`_on_part` 里多了个无条件的 `return`，界面只剩思考过程和工具卡片。
-而当时的自检和断言全在查「某个字符串在不在源码里」，没有一条和
-「用户能不能看见回答」有交集。现在这项会直接喂假数据给渲染函数验证。
-
-`--claims` 值得单独说：它检查的是「README 说 X，代码是不是真的 X」。
-比如「README 说显存低会自动降级」→ 断言 `derive_ctx` 每档边界都对；
-「README 说不联网」→ 断言 agent 的 `web/webfetch` 是 `deny`；
-「README 说换模型不改源码」→ 断言 `set_model` 不写文件。
-不符的时候要么改代码，要么改这份文档，两者不能同时成立。
+![自检输出：11 个分类 45 项全部 OK，包括引擎版本、模型指纹、显存推导、渲染管线、图标结构、子进程收尸、端口占用](docs/shot-selfcheck.png)
 
 ---
 
