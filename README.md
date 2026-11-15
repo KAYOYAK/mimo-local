@@ -27,39 +27,48 @@
 |---|---|---|
 | **MiMo Code** | AI 编程 agent 引擎（读写文件、执行命令、多轮工具调用） | 4096 |
 | **MiMo V2.6 9B** | 主模型，64K 上下文，带视觉投影 | 8080 |
-| **Xiaomi-OCR-0** | 文档识别，作为工具挂在模型手里 | 8090 |
+| **Xiaomi-OCR-0** | 文档识别，桥在收到图片时自动调用；模型也能通过 `--ocr` 主动调 | 8090 |
 
 关键点：**OCR 不是一个独立的 Tab，是模型能调用的一个工具。**
 
-你点「图片」发一张图，界面先把 OCR 跑完（结果贴进对话，你能看到原文），
-再把识别文字当成事实依据交给模型 —— 它基于这段文字回答，不是转述。
+你发一张图，协议桥先把 OCR 跑完，把识别文字拼进请求 —— 模型基于这段文字回答，
+不是转述。
 
 ```
-你：这张收据多少钱？
+你：这张收据多少钱？  + 收据图片
    ↓
-界面跑 OCR（1.5 秒）→ 缩略图 + 折叠的识别原文进对话
+桥提取 base64 → 落临时文件 → 跑 OCR（8090）
    ↓
-同时把识别文字拼进请求 → 9B 模型基于全文回答「RM 5.90，买的是 CLOTH PEG」
+拼成「用户问题 + 图片识别结果 + 不要照抄」发给 MiMo Code
+   ↓
+9B 基于全文回答「RM 5.90，买的是 CLOTH PEG」
 ```
 
 模型需要自己读文件、跑命令时，走的是 MiMo Code 的工具调用（bash / read / edit / glob）。
-每一步都是可折叠的，不展开就看不到，不会把回答挤走。
+每个调用在对话里占一行（`✓ bash {...}`），失败是 `✗`，不刷屏。
 
 ---
 
 ## 一个界面，三个引擎
 
-主窗口就是聊天界面。功能菜单在顶部菜单栏：
+主窗口就是聊天界面。所有桌面侧功能在顶部菜单栏：
 
 ```
+引擎 → 启动引擎 · 停止引擎 · 选择项目目录
 工具 → 自检 · 声明断言 · 生成诊断报告 · 切换模型 · 打开日志目录
 帮助 → 关于
 ```
 
-![完整窗口：顶部菜单栏（工具/帮助）+ 聊天界面。深色主题，小米橙配色](docs/shot-window.png)
+底部状态栏显示 chat-demo 没有的三样信息：
 
-旧的 PySide6 界面保留在菜单里（「工具 → 打开旧界面」）当救急入口，
-主路径上不再出现。
+```
+引擎就绪 | D:\projects\demo                                上下文 64K · 9B + OCR 在线
+```
+
+![完整窗口：深色标题栏 + 菜单栏（引擎/工具/帮助）+ 聊天界面](docs/shot-window.png)
+
+聊天、多会话、Markdown、工具调用展示、看图这些和 chat-demo 重合的部分
+只保留 chat-demo 的实现，旧 PySide6 界面已移除。
 
 ---
 
@@ -97,7 +106,7 @@
 </tr>
 </table>
 
-顶栏菜单里还有自检：
+菜单栏里还有自检：
 
 ![自检输出：45 项全部 OK](docs/shot-selfcheck.png)
 
@@ -146,22 +155,55 @@ D:\models\MiMo-9B-GGUF\
 ### 从源码
 
 ```bash
-uv pip install PySide6-Essentials   # 或 pip install
+uv pip install PySide6-Essentials PySide6-Addons   # Addons 带 QtWebView
 python main.py
 ```
 
-### 打包成 exe
+### 改前端（chat-demo）
+
+`webui/` 是构建产物，不是手写代码。上游是
+[deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT），
+本地改造在 `D:\chat-demo`：
 
 ```powershell
-pyinstaller --onefile --windowed --name MiMoLocal `
-    --add-data "VERSION.txt;." `
-    --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets `
-    --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick `
-    --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia `
-    --collect-submodules tools main.py
+cd D:\chat-demo
+$env:API_ORIGIN = "http://127.0.0.1:8766"      # 指向协议桥
+$env:LOCAL_BACKEND = "1"                       # 关掉所有云端能力
+$env:NODE_ENV = "production"
+pnpm run build                                  # 输出到 dist\
 ```
 
-`--add-data "VERSION.txt;."` **不能漏**：安装器的版本号在打包后读不到
+然后把 `D:\chat-demo\dist\*` 覆盖到 `webui\`。
+
+`LOCAL_BACKEND=1` 会改掉这些（用 rspack 的 DefinePlugin 在构建期写死）：
+
+| 位置 | 改了什么 |
+|---|---|
+| `services/api/client.ts` | 端点从 `/anthropic/v1` 换成 `/v1` |
+| `services/settings.ts` | `apiKey` 默认 `'local'`，智能搜索关掉 |
+| `services/chat/store.ts` | 模型固定 `mimo-local`，systemTools 返回空 |
+| `services/chat/reply.ts` | 附件走 base64 内联，不用 Files API |
+| `components/chatInput/ChatInput.tsx` | 搜索开关和语音按钮不渲染 |
+| `components/messages/AssistantMessage.tsx` | 朗读按钮不渲染 |
+| `app/theme.css` | 追加小米橙 token `#FF6900` |
+
+**没改上游代码的地方**：渲染层（Markdown / 代码高亮 / 表格 / KaTeX）全部原样保留。
+
+### 打包成 exe
+
+用 spec，**不要手写命令行**：
+
+```powershell
+python -m PyInstaller MiMoLocal.spec --noconfirm
+```
+
+`MiMoLocal.spec` 里有两件手写命令行容易漏的东西：
+
+- `('webui', 'webui')` —— chat-demo 的构建产物（153 个文件）
+- `PySide6/plugins/webview/*.dll` —— **漏了运行时报 `No WebView plug-in found!`**，
+  而且窗口化程序会静默退出，看不到任何报错
+
+`--add-data "VERSION.txt;."` 也不能漏：安装器的版本号在打包后读不到
 `config.py`，会回退读 `VERSION.txt`；两个都没有就写 `0.0.0`。
 
 打包完**必须跑一次** `tools\verify_packaged.ps1` —— 它用临时目录当安装位置，
@@ -179,23 +221,23 @@ pwsh -File tools\verify_packaged.ps1 -SkipBuild   # 用现有 dist\ 验证
 
 ## 怎么用
 
-1. 点「选择目录」，挑一个项目文件夹
-2. 点「启动引擎」，等约 20 秒（三个引擎一起起来）
+1. **菜单 → 引擎 → 选择项目目录**，挑一个项目文件夹
+2. **菜单 → 引擎 → 启动引擎**，等约 20 秒（三个引擎一起起来）
 3. 直接说要做什么
-4. **要看图就点输入框左边的「图片」** —— 选一张（可多选），发送时：
+4. **要看图就点输入框右下角的回形针**（附件）。发送时：
 
 ```
-你选图 → 对话里出现「📎 invoice.jpg」
-       → 界面直接跑本地 OCR（不经过模型，约 1.5 秒）
-       → 识别结果整段贴在对话里（等宽字体，可直接选中复制）
-       → 同时把 OCR 文字一起喂给模型，它基于全文回答
+你选图 → 输入框里出现缩略图
+      → 桥提取 base64、落临时文件、跑本地 OCR（约 1.5 秒）
+      → 识别文字拼进请求（带「不要照抄」的指令）
+      → 模型基于全文回答
 ```
 
-**为什么是界面自己跑 OCR，而不是等模型调工具**：模型调 `--ocr` 时结果写进
-文件，还得再读一次——用户看不到，9B 也经常念不全。界面直接跑，结果原样贴在
-对话里，模型拿到的也是全文。
+**为什么是桥跑 OCR，而不是等模型调工具**：模型调 `--ocr` 时结果写进文件，
+还得再读一次 —— 9B 经常念不全，而且要多一轮工具调用。桥直接跑，
+一次请求内就把 OCR 结果给到模型。
 
-顶栏**菜单 → 工具**里有：
+**菜单 → 工具**里有：
 
 - **自检** —— 一眼看出哪里坏了（项数写在输出里，别在这里硬编码）
 - **声明断言** —— README 的承诺是否被代码兑现
@@ -264,16 +306,37 @@ pwsh -File tools\verify_packaged.ps1 -SkipBuild   # 用现有 dist\ 验证
 | `core/hardware.py` | 按显存推导上下文 / KV 精度 / 卸载层数（`derive_ctx` / `derive_kv` 是纯函数，可单测） |
 | `core/engine.py` | 起停 llama-server（两个引擎共用）+ pid 收尸 |
 | `core/agent.py` | 起停 `mimo serve`、写配置、订阅事件流、调 API |
-| `core/render.py` | **决定一个 part 要不要显示**（纯函数，不依赖 Qt，自检直接喂假数据） |
+| `core/agent_bridge.py` | **协议桥**：Anthropic 格式 → MiMo Code session API，含图片 OCR |
+| `core/render.py` | 判断一个 part 要不要显示（纯函数，不依赖 Qt，自检直接喂假数据） |
 | `core/settings.py` | 运行期状态（当前模型等），原子写 `settings.json` |
 | `core/logs.py` | 日志轮转 |
-| `ui_qt.py` | PySide6 界面 + 流式渲染 |
+| `ui_web.py` | 内嵌 WebView + 静态服务，承载 chat-demo |
+| `ui_qt.py` | 主窗口：菜单栏 + 状态栏 + 深色标题栏 |
+| `webui/` | chat-demo 的构建产物（`pnpm build` 输出，153 个文件） |
 | `tools/ocr.py` | OCR 工具，模型通过 bash 调它 |
 | `tools/selfcheck.py` | 自检（含渲染管线检查） |
 | `tools/claims.py` | **声明断言**：把本文档的承诺变成会失败的检查 |
 | `tools/report.py` | 诊断报告 |
 | `tools/verify_packaged.ps1` | 打包后路径验证（不需要显卡） |
 | `agent/config/AGENTS-ocr.md` | **运行时生成**的「你有 OCR 工具」说明 |
+
+### 协议桥为什么要存在
+
+chat-demo 说的是 Anthropic Messages 格式（`POST /v1/messages` + SSE），
+而 MiMo Code 是 session API（`POST /session/{id}/message` + `GET /event`）——
+两边不通。桥做三件事：
+
+1. **翻译请求**：Anthropic messages → session 创建 + 一条文本消息
+2. **翻译事件**：`message.part.updated` → `content_block_delta`
+3. **处理图片**：Anthropic base64 → 临时文件 → OCR → 拼进消息
+
+```
+chat-demo --Anthropic--> 桥(8766) --session API--> MiMo Code(4096)
+                                                      |-> 9B (8080)
+                                                      |-> OCR (8090)
+```
+
+桥只监听 `127.0.0.1`，不对外。
 
 关于 `AGENTS-ocr.md`：模型不是天生知道有 OCR 的。这份文件在每次启动时**按当前
 安装位置生成**（`core/agent.py::_write_agents_md`），然后通过 MiMo Code 的
@@ -294,7 +357,7 @@ python main.py --selfcheck   # 路径、引擎、模型、硬件、渲染管线�
 python main.py --claims      # 本文档的承诺是否被代码兑现
 ```
 
-界面上在 `⋯` 菜单里也有这两个入口 —— 一个只能靠命令行跑的工具，实际上没人跑。
+菜单栏的**工具**里也有这两个入口 —— 一个只能靠命令行跑的工具，实际上没人跑。
 
 自检不是「程序能启动吗」那种敷衍检查。它**真的读文件、查版本、试端口、验证渲染管线**：
 
