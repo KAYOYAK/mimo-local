@@ -173,7 +173,21 @@ class WebPanel(QWidget):
         container = QWidget.createWindowContainer(view, self)
         self._container = container
         lay.addWidget(container, 1)
-        view.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
+
+        # URL 带一个版本号，绕开 WebView2 的页面缓存。
+        #
+        # 踩过的坑：重新构建 webui 后 index.html 引用的 JS 文件名会变
+        # （main.<hash>.js）。WebView2 缓存了旧 index.html，它指向的旧 JS
+        # 已经不存在 —— 请求 404，页面黑屏。而用 Playwright 打开同一个地址
+        # 完全正常，因为它的缓存是干净的。
+        #
+        # 用 index.html 的 mtime 当版本号：构建不变 -> 地址不变 -> 缓存生效；
+        # 构建变了 -> 地址变 -> 强制重新拉取。
+        try:
+            ver = int((dist / "index.html").stat().st_mtime)
+        except Exception:                            # noqa: BLE001
+            ver = 0
+        view.setUrl(QUrl(f"http://127.0.0.1:{port}/?v={ver}"))
 
         # 构造时窗口还没有真实尺寸，先同步一次；之后靠 resizeEvent。
         from PySide6.QtCore import QTimer
