@@ -54,8 +54,8 @@ def wait_http(url: str, timeout: int = 240) -> bool:
     return False
 
 
-def start_engines() -> tuple:
-    """起 9B + MiMo Code。OCR 不在这里起 —— 图片场景没进这三个测试。"""
+def start_engines(with_ocr: bool = False) -> tuple:
+    """起 9B + MiMo Code（+ 可选 OCR）。"""
     WORKDIR.mkdir(parents=True, exist_ok=True)
 
     config.LOGS.mkdir(parents=True, exist_ok=True)
@@ -75,12 +75,20 @@ def start_engines() -> tuple:
     server.start(workdir=WORKDIR)
     ab.set_agent(server)
 
+    ocr = None
+    if with_ocr:
+        from core import engine as eng
+        ocr = eng.make_ocr_engine()
+        ocr.start()
+        if not wait_http(f"http://127.0.0.1:{config.OCR_PORT}/health", 240):
+            raise RuntimeError("OCR 引擎没起来")
+
     bridge = ab.AgentBridge(WORKDIR, BRIDGE_PORT)
     port = bridge.start()
     if not port:
         raise RuntimeError(f"桥起不来（{BRIDGE_PORT} 被占？）")
 
-    return llama, log, server, bridge, port
+    return llama, log, server, bridge, port, ocr
 
 
 def ask(port: int, messages: list, timeout: int = 300) -> tuple[str, str]:
@@ -223,6 +231,34 @@ def scene_abort(bridge, port: int) -> None:
     record("abort/后端已停", idle, "" if idle else "还在 busy")
 
 
+def scene_ocr(bridge, port: int) -> None:
+    """图片：base64 → 桥落临时文件 → OCR → 拼进消息 → 模型基于全文回答。
+
+    坑：桥收到 image block 却没跑 OCR（或跑完没拼进消息）时，模型会说
+    「没有图片」，用户以为图片上传失败。
+    """
+    import base64
+
+    img = ROOT / "docs" / "测试图.jpg"
+    if not img.is_file():
+        record("ocr/测试图存在", False, f"缺 {img}")
+        return
+    b64 = base64.b64encode(img.read_bytes()).decode()
+
+    text, think = ask(port, [{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "base64",
+                                         "media_type": "image/jpeg", "data": b64}},
+            {"type": "text", "text": "这张图里是什么？总共多少钱？"},
+        ],
+    }], timeout=420)
+
+    # 收据上有这些确定字符串。模型答不上来就说明 OCR 没进上下文。
+    hits = [k for k in ("MR. D.I.Y.", "D.I.Y", "5.90", "CLOTH PEG") if k in text]
+    record("ocr/识别结果进了上下文", bool(hits), f"命中 {hits}，正文：{text[:110]!r}")
+
+
 # 中断场景要查后端状态，得拿到 AgentServer —— 由 main 塞进来
 ag_server_ref = None
 
@@ -234,7 +270,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="桥的回归测试")
     ap.add_argument("-s", "--scene", default="all",
-                    choices=["all", "single", "multi", "abort"])
+                    choices=["all", "single", "multi", "ocr", "abort"])
     ap.add_argument("--keep", action="store_true", help="跑完不关引擎")
     args = ap.parse_args()
 
@@ -246,14 +282,16 @@ def main() -> int:
         except OSError:
             pass
 
-    print("起引擎（9B + MiMo Code + 桥）…")
-    llama, log, server, bridge, port = start_engines()
+    want_ocr = args.scene in ("all", "ocr")
+    print(f"起引擎（9B + MiMo Code + 桥{' + OCR' if want_ocr else ''}）…")
+    llama, log, server, bridge, port, ocr = start_engines(with_ocr=want_ocr)
     ag_server_ref = server
     print(f"  ✓ 桥 {port}\n")
 
     scenes = {
         "single": ("单轮：工具调用", scene_single),
         "multi": ("多轮：记得上文", scene_multi),
+        "ocr": ("图片：OCR 进上下文", scene_ocr),
         "abort": ("中断：后端真停", scene_abort),
     }
     todo = list(scenes) if args.scene == "all" else [args.scene]
@@ -269,6 +307,11 @@ def main() -> int:
             print()
     finally:
         if not args.keep:
+            if ocr is not None:
+                try:
+                    ocr.stop()
+                except Exception:                      # noqa: BLE001
+                    pass
             bridge.stop()
             server.stop()
             llama.terminate()
