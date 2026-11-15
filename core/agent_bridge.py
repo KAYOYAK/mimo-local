@@ -311,7 +311,12 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             if not isinstance(b, dict) or b.get("type") != "image":
                 continue
             src = b.get("source") or {}
+            print(f"[bridge] image source: type={src.get('type')!r} "
+                  f"media={src.get('media_type')!r} "
+                  f"data_len={len(src.get('data') or '')} "
+                  f"file_id={src.get('file_id')!r}")
             if src.get("type") != "base64":
+                print("[bridge] 跳过：不是 base64")
                 continue
             data = src.get("data") or ""
             media = src.get("media_type") or "image/png"
@@ -345,16 +350,21 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         for img in images:
             try:
                 text = client.ocr_image(OCR_PORT, img, "doc")
+                print(f"[bridge] OCR 完成: {len(text or '')} 字符")
                 results.append(text or "")
-            except Exception:                      # noqa: BLE001
+            except Exception as exc1:              # noqa: BLE001
+                print(f"[bridge] OCR 首次失败: {exc1}")
                 # 引擎没起：拉起来再试一次
                 try:
                     e = eng.make_ocr_engine()
                     if not e.running:
+                        print("[bridge] 正在启动 OCR 引擎…")
                         e.start()
                     text = client.ocr_image(OCR_PORT, img, "doc")
+                    print(f"[bridge] OCR 重试完成: {len(text or '')} 字符")
                     results.append(text or "")
                 except Exception as exc2:          # noqa: BLE001
+                    print(f"[bridge] OCR 彻底失败: {exc2}")
                     results.append(f"（OCR 失败：{exc2}）")
         return results
 
@@ -380,10 +390,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         if isinstance(raw_content, str):
             text = raw_content
         elif isinstance(raw_content, list):
+            # 诊断：看看前端到底发了什么 block
+            kinds = [b.get("type") for b in raw_content if isinstance(b, dict)]
+            print(f"[bridge] 收到 {len(raw_content)} 个 block: {kinds}")
             text = "\n".join(
                 b.get("text", "") for b in raw_content
                 if isinstance(b, dict) and b.get("type") == "text"
             )
+        else:
+            print(f"[bridge] content 类型异常: {type(raw_content)}")
 
         # 图片走本地 OCR，把识别结果当成事实依据拼进消息 ——
         # 和编程界面同一套逻辑：OCR 结果用户可见，模型拿到的是全文。
@@ -395,6 +410,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             except Exception:                      # noqa: BLE001
                 pass
 
+        print(f"[bridge] 图片 {len(images)} 张，OCR 结果 {len(ocr_texts)} 条")
+
         if ocr_texts:
             parts = []
             if text.strip():
@@ -405,6 +422,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 parts.append(f"【图片 {i} 的识别结果】\n{o}")
             parts.append("请基于上面的图片内容回答用户的问题，不要原样照抄图片文字。")
             text = "\n\n".join(parts)
+
+        print(f"[bridge] 最终发给 MiMo Code: {len(text)} 字符，前 120 字: {text[:120]!r}")
 
         if not text.strip():
             self._json(400, {"error": {"message": "没有文本内容", "type": "invalid_request"}})

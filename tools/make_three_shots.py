@@ -68,7 +68,7 @@ def start_llama():
     return p, log
 
 
-def ask(page, text=None, image_b64=None, timeout=300):
+def ask(page, text=None, image_b64=None, timeout=420):
     ta = page.query_selector("textarea")
     if not ta:
         return False
@@ -77,13 +77,29 @@ def ask(page, text=None, image_b64=None, timeout=300):
         # chat-demo 里是隐藏的 <input type="file">（fileInputRef），
         # 点按钮会走 file chooser。直接 set_input_files 更可靠。
         try:
-            inp = page.query_selector('input[type=file]')
+            # 页面刚加载时 input 可能还没挂上，等它出现
+            inp = None
+            for _ in range(15):
+                inp = page.query_selector('input[type=file]')
+                if inp:
+                    break
+                page.wait_for_timeout(1000)
             if not inp:
                 print("    找不到 input[type=file]")
             else:
                 inp.set_input_files(str(IMG))
-                page.wait_for_timeout(4000)
-                print("    已附加图片")
+                # 附件要做 base64 转换（本地模式走 blobToDataUrl），
+                # 等 4 秒不够：还没变成 done 时发送按钮是禁用的，
+                # 按 Enter 会被静默吞掉。等缩略图出现且发送可用。
+                n_before = len(page.query_selector_all("img"))
+                for _ in range(25):
+                    page.wait_for_timeout(1000)
+                    n_now = len(page.query_selector_all("img"))
+                    if n_now > n_before:
+                        break
+                page.wait_for_timeout(3000)      # 等 base64 转换完成
+                n_after = len(page.query_selector_all("img"))
+                print(f"    已附加图片（img {n_before} -> {n_after}）")
         except Exception as e:
             print(f"    附件失败: {e}")
     if text:
@@ -98,9 +114,11 @@ def ask(page, text=None, image_b64=None, timeout=300):
             cur = page.inner_text("body")
         except Exception:
             continue
-        if cur == last and len(cur) > 200:
+        # OCR 要跑 20+ 秒，桥才把消息发给 MiMo Code，然后模型还要处理。
+        # 稳定阈值从 6 提到 10，避免在「思考中」就截图。
+        if cur == last and len(cur) > 400:
             stable += 1
-            if stable >= 6:
+            if stable >= 10:
                 return True
         else:
             stable = 0
@@ -174,7 +192,7 @@ def main() -> int:
         page2.wait_for_timeout(3000)
         if b64:
             print("发图 + 问题…")
-            ok = ask(page2, "这张图里是什么？总共多少钱？")
+            ok = ask(page2, "这张图里是什么？总共多少钱？", image_b64=b64)
             print(f"  {'✓' if ok else '⚠'} 完成")
             page2.wait_for_timeout(1500)
             out2 = DOCS / "shot-three-ocr.png"

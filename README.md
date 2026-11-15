@@ -88,7 +88,14 @@
 
 不用切界面，聊天、工具调用、看图都在这里发生：
 
-![工具调用：模型自己 read 了三个文件，每个调用一行 ✓，然后基于内容回答](docs/shot-three-tools.png)
+<table>
+<tr>
+<td width="50%"><img src="docs/shot-three-ocr.png" alt="图片 OCR"><br>
+<b>发图 → OCR → 回答</b><br>收据的 OCR 结果直接当事实依据，模型基于全文回答</td>
+<td width="50%"><img src="docs/shot-three-tools.png" alt="工具调用"><br>
+<b>工具调用</b><br>模型自己 read 文件、跑命令，每一步一行 ✓</td>
+</tr>
+</table>
 
 顶栏菜单里还有自检：
 
