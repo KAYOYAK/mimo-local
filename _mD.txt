@@ -1,0 +1,47 @@
+feat: 四个新功能 —— token 用量 / 清理会话 / 工具折叠 / 模型显示
+
+用户选的四项，按投入产出比做完：
+
+## 1. 上下文占用实时更新
+
+之前状态栏的「上下文 64K」是启动时算的，运行时用了多少看不到。
+MiMo Code 的 send_message 响应里其实带 `tokens`：
+  {"info": {"tokens": {"input": 26560, "output": 5, ...}}}
+
+- 桥加 `on_usage` 回调，每回合结束回调 (used, output)
+- WebPanel 加 `usage_changed` Signal（桥跑在 HTTP 线程，必须用信号切回 Qt 线程）
+- 状态栏显示 `上下文 45K/64K（70%） · 输出 128`
+
+## 2. 清理旧会话
+
+chat-demo 的「删除对话」只删本地 IndexedDB，MiMo Code 的 session
+还留在 agent/data/mimocode 里，用久了会积一堆。
+
+菜单 → 工具 → 清理旧会话：列出全部、筛出 7 天没动的、
+确认后逐个 DELETE /session/{id}，报告删掉几个。
+
+## 3. 工具调用折叠
+
+之前工具调用是一行纯文本，长命令（Get-ChildItem -Recurse -Force ...）
+会占满一整行。
+
+**用 thinking block 承载**，理由：
+- chat-demo 的 buildReplyView 只认 server_tool_use（联网搜索那套），
+  发标准 tool_use 会被忽略
+- thinking 它已经渲染成可折叠的「思考过程」，零前端改动就能折叠
+- 加 🔧 前缀，和模型自己的 reasoning 区分
+
+## 4. 模型名显示
+
+状态栏从「9B + OCR 在线」改成显示真实模型文件名
+（tools/switch_model.current_model()）。切换仍走菜单 ——
+chat-demo 没有模型选择器组件，要做下拉得新写一个 UI 组件，
+而 MiMo Code 换模型必须重启引擎，热切换做不到。
+
+## 冒烟测试
+
+  中央: WebPanel
+  引擎: ['启动引擎', '停止引擎', '选择项目目录…']
+  工具: ['自检', '声明断言', '生成诊断报告', '切换模型…', '打开日志目录', '清理旧会话…']
+  帮助: ['关于 MiMo Local']
+  usage_changed 信号: ✓

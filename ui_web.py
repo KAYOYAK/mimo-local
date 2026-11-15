@@ -89,6 +89,9 @@ class WebPanel(QWidget):
     """内嵌 chat-demo 的聊天页。"""
 
     failed = Signal(str)
+    # 每回合结束后报一次 token 用量：(input+output, output)。
+    # 桥跑在 HTTP 线程里，必须用信号切回 Qt 线程再更新 UI。
+    usage_changed = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -152,12 +155,17 @@ class WebPanel(QWidget):
             except Exception:                    # noqa: BLE001
                 pass
             self._bridge = AgentBridge(bridge_dir)
+            self._bridge.on_usage = self._emit_usage
             bridge_port = self._bridge.start()
             if bridge_port:
                 print(f"[ui_web] 桥已启动 http://127.0.0.1:{bridge_port}  cwd={bridge_dir}")
         except Exception as exc:                     # noqa: BLE001
             print(f"[ui_web] 桥启动失败：{exc}")
             self._bridge = None
+
+    def _emit_usage(self, used: int, out: int) -> None:
+        """桥的回调（HTTP 线程）→ 发信号（Qt 线程）。"""
+        self.usage_changed.emit(used, out)
 
         view = QWebView(None)
         self._view = view

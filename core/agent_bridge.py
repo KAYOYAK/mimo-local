@@ -47,6 +47,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Callable
 
 from core import agent as ag
 
@@ -108,9 +109,17 @@ class _BlockTracker:
             delta_type = "thinking_delta"
             field = "thinking"
         elif ptype == "tool":
-            # 工具调用转成文本，前端才看得见。
-            # 只发**最终状态**：MiMo Code 会为同一个工具连续推 pending →
-            # running → completed，全发出来会把回答刷满，看着像乱码。
+            # 工具调用 → thinking block。
+            #
+            # 为什么不用 Anthropic 标准的 tool_use：chat-demo 的 buildReplyView
+            # 只认 server_tool_use（联网搜索那套），发 tool_use 会被忽略，
+            # 调用的结果就看不见了。
+            #
+            # 为什么用 thinking：chat-demo 已经把它渲染成可折叠的「思考过程」，
+            # 零前端改动就能折叠。加 🔧 前缀和模型的 reasoning 区分开。
+            #
+            # 只发**最终状态**：同一工具会连推 pending → running → completed，
+            # 全发出来会刷屏。
             tool = part.get("tool") or part.get("name") or "tool"
             state = part.get("state") or {}
             status = state.get("status") or "running"
@@ -124,10 +133,10 @@ class _BlockTracker:
             if len(arg_s) > 200:
                 arg_s = arg_s[:200] + "…"
             mark = "✓" if status == "completed" else "✗"
-            full = f"{mark} {tool} {arg_s}\n\n"
-            kind = "text"
-            delta_type = "text_delta"
-            field = "text"
+            full = f"🔧 {mark} {tool} {arg_s}\n\n"
+            kind = "thinking"
+            delta_type = "thinking_delta"
+            field = "thinking"
         else:
             return []
 
@@ -314,6 +323,24 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
 
     # ---------- 核心：一次对话回合 ----------
+
+    def _report_usage(self, reply) -> None:
+        """从 send_message 的返回值里取 token 用量，回调出去。
+
+        MiMo Code 的响应形如：
+          {"info": {"tokens": {"input": 26560, "output": 5, "reasoning": 0,
+                               "cache": {"read": 0, "write": 0}}, ...}, ...}
+        """
+        if self.on_usage is None or not isinstance(reply, dict):
+            return
+        try:
+            tok = (reply.get("info") or {}).get("tokens") or {}
+            used = int(tok.get("input") or 0) + int(tok.get("output") or 0)
+            out = int(tok.get("output") or 0)
+            if used:
+                self.on_usage(used, out)
+        except Exception:                          # noqa: BLE001
+            pass
 
     def _abort(self, agent_server: ag.AgentServer, session_id: str, why: str) -> None:
         """真正中断后端回合。chat-demo 的停止按钮只断前端，这里补上后端。"""
@@ -530,8 +557,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
         send_ok = False
         try:
-            ag.send_message(agent_server, sid, text, timeout=900)
+            reply = ag.send_message(agent_server, sid, text, timeout=900)
             send_ok = True
+            self._report_usage(reply)
         except Exception as exc:                   # noqa: BLE001
             error.append(str(exc))
         finally:

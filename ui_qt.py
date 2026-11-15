@@ -241,6 +241,7 @@ class MainWindow(QMainWindow):
             old.hide()
 
         self.web_panel = WebPanel()
+        self.web_panel.usage_changed.connect(self._on_usage)
         self.setCentralWidget(self.web_panel)
 
         self._build_menu()
@@ -369,6 +370,12 @@ class MainWindow(QMainWindow):
             act = QAction(label, self)
             act.triggered.connect(slot)
             m_tool.addAction(act)
+        m_tool.addSeparator()
+        # chat-demo 删对话只删本地 IndexedDB，MiMo Code 的 session 还留在
+        # 磁盘上（agent/data/mimocode）。给一个手动清理入口。
+        act = QAction("清理旧会话…", self)
+        act.triggered.connect(self.clean_sessions)
+        m_tool.addAction(act)
 
         # ---------- 帮助 ----------
         m_help = mb.addMenu("帮助")
@@ -1714,6 +1721,78 @@ class MainWindow(QMainWindow):
         if lab is not None:
             lab.setText(text)
 
+    def _on_usage(self, used: int, out: int) -> None:
+        """桥报来的 token 用量（每回合一次）。"""
+        ctx = getattr(self, "_ctx_size", 0) or 65536
+        pct = min(100, round(used * 100 / ctx)) if ctx else 0
+        self._sb_set_ctx(f"上下文 {used // 1024}K/{ctx // 1024}K（{pct}%） · 输出 {out}")
+
+    def clean_sessions(self) -> None:
+        """清理 MiMo Code 里积压的旧会话。
+
+        为什么需要：chat-demo 的「删除对话」只删本地 IndexedDB，
+        MiMo Code 的 session 还留在 `agent/data/mimocode/` 里。
+        用久了会积一堆没人访问的对话。
+        """
+        import time as _t
+
+        from PySide6.QtWidgets import QMessageBox
+
+        from core import agent as ag
+
+        if not self.agent or not getattr(self.agent, "running", False):
+            QMessageBox.information(self, "引擎没起", "先启动引擎，再清理会话。")
+            return
+
+        try:
+            items = ag.list_sessions(self.agent, None)
+        except Exception as exc:                   # noqa: BLE001
+            QMessageBox.warning(self, "读取失败", f"拿不到会话列表：{exc}")
+            return
+
+        if not items:
+            QMessageBox.information(self, "没有会话", "MiMo Code 里一个会话都没有。")
+            return
+
+        now_ms = _t.time() * 1000
+        keep_ms = 7 * 24 * 3600 * 1000            # 7 天内动过的保留
+        old = []
+        for s in items:
+            upd = (s.get("time") or {}).get("updated") or 0
+            if upd and now_ms - upd > keep_ms:
+                old.append(s)
+
+        if not old:
+            QMessageBox.information(
+                self, "不用清",
+                f"一共 {len(items)} 个会话，最近 7 天都动过，没有可清的。",
+            )
+            return
+
+        ans = QMessageBox.question(
+            self, "清理旧会话",
+            f"MiMo Code 里一共 {len(items)} 个会话，"
+            f"其中 {len(old)} 个超过 7 天没动过。\n\n"
+            f"删掉它们（对话记录本身在 chat-demo 那边不受影响）。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+
+        ok = 0
+        for s in old:
+            sid = s.get("id")
+            if not sid:
+                continue
+            try:
+                if ag.delete_session(self.agent, sid):
+                    ok += 1
+            except Exception:                      # noqa: BLE001
+                pass
+
+        self._set_status(f"已清理 {ok} 个旧会话", "ok")
+        QMessageBox.information(self, "清理完成", f"删掉 {ok} / {len(old)} 个旧会话。")
+
     def _set_busy(self, busy: bool):
         self.busy = busy
         self.btn_send.setEnabled(not busy)
@@ -1961,6 +2040,8 @@ class MainWindow(QMainWindow):
                 self.chat_engine.start(on_phase=lambda s: self.bridge.status.emit(s, "busy"))
 
                 ctx = client.get_context_size(config.CHAT_PORT)
+                # 状态栏按真实上下文算百分比（_on_usage 要用）
+                self._ctx_size = ctx
 
                 # OCR 引擎也一起拉起来 —— 三个能力「同时在线」，不是按需切换。
                 # 实测三个同占 11116 / 12227 MiB，余 1111 MiB。
@@ -2006,7 +2087,14 @@ class MainWindow(QMainWindow):
                 self.bridge.status.emit("就绪", "ok")
                 ocr_tag = "OCR 在线" if self.ocr_live else "OCR 按需"
                 self.ctx_label.setText(f"上下文 {ctx // 1024}K\n9B + {ocr_tag}\n全本地推理")
-                self._sb_set_ctx(f"上下文 {ctx // 1024}K · 9B + {ocr_tag}")
+                # 状态栏带上真实模型名，用户一眼知道在跑哪个
+                try:
+                    from tools.switch_model import current_model
+                    _mn = current_model()
+                    _mn_s = getattr(_mn, "stem", None) or (str(_mn) if _mn else "9B")
+                except Exception:                  # noqa: BLE001
+                    _mn_s = "9B"
+                self._sb_set_ctx(f"上下文 {ctx // 1024}K · {_mn_s} + {ocr_tag}")
                 self.btn_engine.setText("停止引擎")
                 self._sync_engine_actions(True)
                 # 把已有的历史对话列出来
