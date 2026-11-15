@@ -321,6 +321,9 @@ class AgentServer:
         cwd = Path(workdir) if workdir else config.ROOT
         if not cwd.is_dir():
             raise RuntimeError(f"工作目录不存在：{cwd}")
+        # 记下来：session 的 cwd 由 serve 进程启动目录决定（API 改不了），
+        # 桥（agent_bridge）建会话时要把它传给 create_session。
+        self.workdir = cwd
 
         # 先写配置（含权限预授权）
         write_config()

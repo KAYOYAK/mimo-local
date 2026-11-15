@@ -139,10 +139,22 @@ class WebPanel(QWidget):
         try:
             from core.agent_bridge import AgentBridge
 
-            self._bridge = AgentBridge(Path(r"D:\mimo-desktop"))
+            # workdir 用 MiMo Code 自己的启动目录（session 的 cwd 由它决定，
+            # API 改不了），拿不到时退回当前目录。
+            bridge_dir = Path.cwd()
+            AgentServer_probe = None
+            try:
+                from core import agent_bridge as _ab
+
+                AgentServer_probe = _ab.peek_agent()
+                if AgentServer_probe is not None:
+                    bridge_dir = Path(getattr(AgentServer_probe, "workdir", bridge_dir) or bridge_dir)
+            except Exception:                    # noqa: BLE001
+                pass
+            self._bridge = AgentBridge(bridge_dir)
             bridge_port = self._bridge.start()
             if bridge_port:
-                print(f"[ui_web] 桥已启动 http://127.0.0.1:{bridge_port}")
+                print(f"[ui_web] 桥已启动 http://127.0.0.1:{bridge_port}  cwd={bridge_dir}")
         except Exception as exc:                     # noqa: BLE001
             print(f"[ui_web] 桥启动失败：{exc}")
             self._bridge = None

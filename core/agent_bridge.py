@@ -221,7 +221,11 @@ class AgentBridge:
             sid = self._sessions.get(key)
             if sid:
                 return sid
-        sid = ag.create_session(agent_server, self.workdir)
+        # MiMo Code 的 session cwd 由 serve 进程启动时的目录决定，
+        # 这里只是把「期望目录」告诉它。优先用 agent 自己的 workdir，
+        # 拿不到才退回构造时传的那个。
+        workdir = getattr(agent_server, "workdir", None) or self.workdir
+        sid = ag.create_session(agent_server, Path(workdir))
         with self._lock:
             self._sessions[key] = sid
         return sid
@@ -449,6 +453,11 @@ def set_agent(server: ag.AgentServer | None) -> None:
     """由主程序在启动/停止引擎时写入。"""
     global _agent_server
     _agent_server = server
+
+
+def peek_agent() -> ag.AgentServer | None:
+    """给 ui_web 查询当前 agent（拿它的 workdir 用）。"""
+    return _agent_server
 
 
 def _grab_agent() -> ag.AgentServer | None:
