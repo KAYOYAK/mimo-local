@@ -210,10 +210,12 @@ class MainWindow(QMainWindow):
         self._wrap_web_panel()
 
         # 重绘节流：80ms 一次。不节流的话每个 token 都重排，界面直接卡死
+        # 旧的 PySide6 聊天区已不被显示（chat-demo 接管），
+        # 不再起重绘定时器 —— 它每 80ms 调 _flush 重排一套看不见的控件。
         self._repaint_timer = QTimer(self)
         self._repaint_timer.setInterval(80)
         self._repaint_timer.timeout.connect(self._flush)
-        self._repaint_timer.start()
+        # self._repaint_timer.start()   # 旧界面不显示了，不用再刷
 
         # 窗口出来后再起引擎（要 20 秒，别卡住构造）
         QTimer.singleShot(600, self._auto_start)
@@ -242,6 +244,39 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.web_panel)
 
         self._build_menu()
+        self._build_statusbar()
+
+    def _build_statusbar(self):
+        """状态栏：chat-demo 里没有、但必须让用户看得见的三样东西。
+
+        旧 PySide6 界面把「引擎状态 / 项目目录 / 上下文占用」放在顶栏，
+        chat-demo 没有这些。挪到状态栏，功能只多不少。
+        """
+        from PySide6.QtWidgets import QLabel
+
+        sb = self.statusBar()
+        sb.setStyleSheet(
+            "QStatusBar { background:#141414; color:#86868b; border-top:1px solid #2e2e2e; }"
+            "QStatusBar QLabel { color:#86868b; padding:0 8px; font-size:12px; }"
+        )
+        sb.setSizeGripEnabled(False)
+
+        self._sb_state = QLabel("引擎未启动")
+        self._sb_state.setStyleSheet("color:#636366;")
+        sb.addWidget(self._sb_state)
+
+        self._sb_dir = QLabel("未选目录")
+        sb.addWidget(self._sb_dir, 1)
+
+        self._sb_ctx = QLabel("")
+        sb.addPermanentWidget(self._sb_ctx)
+
+        # 目录如果已经确定（构造时可能有），先同步一次
+        try:
+            if getattr(self, "workdir", None):
+                self._sb_dir.setText(str(self.workdir))
+        except Exception:                          # noqa: BLE001
+            pass
 
     def _build_menu(self):
         """菜单栏：引擎控制 + 桌面侧能力。
@@ -1621,9 +1656,25 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str, kind: str = "dim"):
         color = {"dim": C_TXT3, "busy": C_WARN, "ok": C_OK, "err": C_ERR}[kind]
+        # 旧界面的状态灯（不显示，但保留 —— 有些逻辑会读它）
         self.dot.setStyleSheet(f"color: {color}; font-size: 12px;")
         self.status.setText(text)
         self.status.setStyleSheet(f"color: {color}; font-size: 12px;")
+        # 状态栏（用户真正看得到的那个）
+        sb = getattr(self, "_sb_state", None)
+        if sb is not None:
+            sb.setText(text)
+            sb.setStyleSheet(f"color: {color};")
+
+    def _sb_set_dir(self, path) -> None:
+        lab = getattr(self, "_sb_dir", None)
+        if lab is not None:
+            lab.setText(str(path) if path else "未选目录")
+
+    def _sb_set_ctx(self, text: str) -> None:
+        lab = getattr(self, "_sb_ctx", None)
+        if lab is not None:
+            lab.setText(text)
 
     def _set_busy(self, busy: bool):
         self.busy = busy
@@ -1917,6 +1968,7 @@ class MainWindow(QMainWindow):
                 self.bridge.status.emit("就绪", "ok")
                 ocr_tag = "OCR 在线" if self.ocr_live else "OCR 按需"
                 self.ctx_label.setText(f"上下文 {ctx // 1024}K\n9B + {ocr_tag}\n全本地推理")
+                self._sb_set_ctx(f"上下文 {ctx // 1024}K · 9B + {ocr_tag}")
                 self.btn_engine.setText("停止引擎")
                 self._sync_engine_actions(True)
                 # 把已有的历史对话列出来
@@ -1952,6 +2004,7 @@ class MainWindow(QMainWindow):
                 self.btn_engine.setText("启动引擎")
                 self._sync_engine_actions(False)
                 self.ctx_label.setText("")
+                self._sb_set_ctx("")
                 self._add_system_text("引擎已停止。")
             finally:
                 self.btn_engine.setEnabled(True)
