@@ -218,10 +218,11 @@ class MainWindow(QMainWindow):
     # ================= 构建 =================
 
     def _wrap_web_panel(self):
-        """把 _build() 建好的界面包进 QStackedWidget，旁边放一页 Web 聊天界面。
+        """主界面 = chat-demo，功能走菜单栏。
 
-        这样不用改 _build() 里那两百行布局代码，回退成本也低：
-        删掉这一次调用就回到纯 Qt 界面。
+        1.0.x 那套 PySide6 界面保留在 stack 的第 0 页（万一 Web 层出问题
+        还能从菜单切回去救急），但**不再作为主界面**：三个引擎的能力
+        （聊天 / 工具调用 / OCR）在聊天界面里已经全通了。
         """
         from PySide6.QtWidgets import QStackedWidget
 
@@ -234,34 +235,63 @@ class MainWindow(QMainWindow):
 
         old = self.centralWidget()
         self.stack = QStackedWidget()
-        self.stack.addWidget(old)                     # 0：原 PySide6 界面
+        self.stack.addWidget(old)                     # 0：旧 PySide6 界面（备用）
         self.web_panel = WebPanel()
         self.stack.addWidget(self.web_panel)          # 1：chat-demo
         self.setCentralWidget(self.stack)
+        self.stack.setCurrentIndex(1)                 # 默认就是它
 
-        # 默认进聊天界面（用户要的就是这个「前端」）
-        self.stack.setCurrentIndex(1)
+        self._build_menu()
 
-        # 顶栏加一个切换按钮，两个界面来回走
-        from PySide6.QtWidgets import QPushButton
+    def _build_menu(self):
+        """菜单栏：把原来藏在 `⋯` 里的功能挪到窗口顶部。
 
-        top = self.findChild(QFrame, "topbar")
-        if top is not None and top.layout() is not None:
-            self.btn_switch = QPushButton("编程界面")
-            self.btn_switch.setObjectName("ghost")
-            self.btn_switch.setFixedHeight(30)
-            self.btn_switch.setToolTip("在聊天界面和编程界面之间切换")
-            self.btn_switch.clicked.connect(self._toggle_view)
-            top.layout().addWidget(self.btn_switch)
+        聊天界面的 Web 层不提供这些入口（自检、诊断、换模型都是桌面侧
+        的能力），所以放在 Qt 的 menubar 上最省事，也不需要改前端。
+        """
+        from PySide6.QtGui import QAction
+
+        mb = self.menuBar()
+        mb.setStyleSheet(
+            "QMenuBar { background:#141414; color:#f4f4f5; }"
+            "QMenuBar::item:selected { background:#282828; }"
+            "QMenu { background:#1f1f1f; color:#f4f4f5; border:1px solid #2e2e2e; }"
+            "QMenu::item:selected { background:#282828; }"
+        )
+
+        m_tool = mb.addMenu("工具")
+        for label, slot in (
+            ("自检", self.run_selfcheck),
+            ("声明断言", self.run_claims),
+            ("生成诊断报告", self.make_report),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(slot)
+            m_tool.addAction(act)
+        m_tool.addSeparator()
+        for label, slot in (
+            ("切换模型…", self.switch_model),
+            ("打开日志目录", self.open_logs),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(slot)
+            m_tool.addAction(act)
+        m_tool.addSeparator()
+        act = QAction("打开旧界面（备用）", self)
+        act.triggered.connect(lambda: self.stack.setCurrentIndex(0))
+        m_tool.addAction(act)
+
+        m_help = mb.addMenu("帮助")
+        act = QAction("关于 MiMo Local", self)
+        act.triggered.connect(self.show_about)
+        m_help.addAction(act)
 
     def _toggle_view(self):
-        """聊天 <-> 编程 切换。"""
+        """聊天 <-> 旧界面 切换（菜单里的「打开旧界面」用）。"""
         if not hasattr(self, "stack"):
             return
         web_now = self.stack.currentIndex() == 1
         self.stack.setCurrentIndex(0 if web_now else 1)
-        if hasattr(self, "btn_switch"):
-            self.btn_switch.setText("聊天界面" if web_now else "编程界面")
 
     def _build(self):
         root = QWidget()
