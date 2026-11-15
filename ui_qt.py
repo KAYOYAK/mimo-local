@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
         self._repaint_timer.timeout.connect(self._flush)
         self._repaint_timer.start()
 
+        # 窗口出来后再起引擎（要 20 秒，别卡住构造）
+        QTimer.singleShot(600, self._auto_start)
+
     # ================= 构建 =================
 
     def _wrap_web_panel(self):
@@ -241,17 +244,41 @@ class MainWindow(QMainWindow):
         self._build_menu()
 
     def _build_menu(self):
-        """菜单栏：自检、诊断、换模型这些桌面侧能力。"""
+        """菜单栏：引擎控制 + 桌面侧能力。
+
+        Web 前端跑起来之后，原来顶栏那几个按钮（启动引擎 / 停止引擎 /
+        选择目录）全没了，这些是桌面侧才有的入口，挪到菜单栏。
+        """
         from PySide6.QtGui import QAction
 
         mb = self.menuBar()
         mb.setStyleSheet(
-            "QMenuBar { background:#141414; color:#f4f4f5; }"
-            "QMenuBar::item:selected { background:#282828; }"
-            "QMenu { background:#1f1f1f; color:#f4f4f5; border:1px solid #2e2e2e; }"
+            "QMenuBar { background:#141414; color:#f4f4f5; padding:2px 4px; }"
+            "QMenuBar::item { padding:4px 10px; }"
+            "QMenuBar::item:selected { background:#282828; border-radius:4px; }"
+            "QMenu { background:#1f1f1f; color:#f4f4f5; border:1px solid #2e2e2e; padding:4px; }"
+            "QMenu::item { padding:6px 24px 6px 12px; border-radius:4px; }"
             "QMenu::item:selected { background:#282828; }"
+            "QMenu::separator { height:1px; background:#2e2e2e; margin:4px 8px; }"
         )
 
+        # ---------- 引擎 ----------
+        m_engine = mb.addMenu("引擎")
+        self.act_start = QAction("启动引擎", self)
+        self.act_start.triggered.connect(lambda: self._start())
+        m_engine.addAction(self.act_start)
+
+        self.act_stop = QAction("停止引擎", self)
+        self.act_stop.triggered.connect(lambda: self._stop())
+        self.act_stop.setEnabled(False)
+        m_engine.addAction(self.act_stop)
+
+        m_engine.addSeparator()
+        act_dir = QAction("选择项目目录…", self)
+        act_dir.triggered.connect(self.pick_dir)
+        m_engine.addAction(act_dir)
+
+        # ---------- 工具 ----------
         m_tool = mb.addMenu("工具")
         for label, slot in (
             ("自检", self.run_selfcheck),
@@ -270,10 +297,20 @@ class MainWindow(QMainWindow):
             act.triggered.connect(slot)
             m_tool.addAction(act)
 
+        # ---------- 帮助 ----------
         m_help = mb.addMenu("帮助")
         act = QAction("关于 MiMo Local", self)
         act.triggered.connect(self.show_about)
         m_help.addAction(act)
+
+        # 状态栏显示引擎状态（原来顶栏那个小圆点）
+        try:
+            self.statusBar().setStyleSheet(
+                "QStatusBar { background:#141414; color:#86868b; }"
+            )
+            self.statusBar().showMessage("未启动")
+        except Exception:                          # noqa: BLE001
+            pass
 
     def _build(self):
         root = QWidget()
@@ -1771,6 +1808,34 @@ class MainWindow(QMainWindow):
                     # 只有 GUI 线程能碰 items；这里只发信号
                     self.bridge.event.emit(ag.Event("message.part.updated", sid, part=p))
 
+    def _sync_engine_actions(self, running: bool):
+        """菜单里的启动/停止项跟着引擎状态走。"""
+        for name, enabled in (
+            ("act_start", not running),
+            ("act_stop", running),
+        ):
+            act = getattr(self, name, None)
+            if act is not None:
+                try:
+                    act.setEnabled(enabled)
+                except Exception:                  # noqa: BLE001
+                    pass
+        try:
+            self.statusBar().showMessage("引擎运行中" if running else "引擎已停止")
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _auto_start(self):
+        """窗口显示后自动起引擎 —— 原来的版本要手动点「启动引擎」，
+        移到 Web 界面之后那个按钮没了，不给自动启动用户会以为坏了。"""
+        if self.workdir is None:
+            # 没选过目录：用用户主目录兜底，至少能对话
+            self.workdir = Path.home()
+        try:
+            self._start()
+        except Exception as exc:                    # noqa: BLE001
+            print(f"[auto] 引擎启动失败：{exc}")
+
     def pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择项目目录")
         if not d:
@@ -1853,11 +1918,13 @@ class MainWindow(QMainWindow):
                 ocr_tag = "OCR 在线" if self.ocr_live else "OCR 按需"
                 self.ctx_label.setText(f"上下文 {ctx // 1024}K\n9B + {ocr_tag}\n全本地推理")
                 self.btn_engine.setText("停止引擎")
+                self._sync_engine_actions(True)
                 # 把已有的历史对话列出来
                 self.refresh_sessions()
             except Exception as e:
                 self.bridge.status.emit("启动失败", "err")
                 self.btn_engine.setText("启动引擎")
+                self._sync_engine_actions(False)
                 self.bridge.fatal.emit(str(e))
             finally:
                 self.btn_engine.setEnabled(True)
@@ -1883,6 +1950,7 @@ class MainWindow(QMainWindow):
                     pass
                 self.bridge.status.emit("已停止", "dim")
                 self.btn_engine.setText("启动引擎")
+                self._sync_engine_actions(False)
                 self.ctx_label.setText("")
                 self._add_system_text("引擎已停止。")
             finally:
