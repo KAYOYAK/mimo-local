@@ -51,29 +51,50 @@
 
 顶栏一个按钮，在两种界面之间切：
 
-<table>
-<tr>
-<td width="50%"><img src="docs/shot-chat-welcome.png" alt="聊天界面"><br>
-<b>聊天界面</b>（默认）<br>DeepSeek 官方前端改造：多会话、分支切换、Markdown/KaTeX/Mermaid 全都有</td>
-<td width="50%"><img src="docs/screenshot.png" alt="编程界面"><br>
-<b>编程界面</b><br>PySide6 自绘：看图问答、工具调用折叠、OCR 原文可见</td>
-</tr>
-</table>
-
-![写代码](docs/shot-code.png)
+| 界面 | 定位 |
+|---|---|
+| **聊天界面**（默认） | DeepSeek 官方 chat-demo 改造：多会话、分支切换、Markdown/KaTeX/Mermaid、深浅主题 |
+| **编程界面** | PySide6 自绘：看图问答（OCR 原文可见）、工具调用折叠、自检 |
 
 ---
 
-## 界面细节
+## 聊天界面
+
+深色和浅色都跟系统走：
 
 <table>
 <tr>
-<td width="50%"><img src="docs/shot-tools.png" alt="工具调用"><br>
-<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠，不刷屏</td>
-<td width="50%"><img src="docs/shot-history.png" alt="多轮对话"><br>
-<b>多轮对话</b><br>每个对话独立 session，上下文互不干扰</td>
+<td width="50%"><img src="docs/shot-chat-welcome.png" alt="聊天界面"><br>
+<b>深色主题</b><br>小米橙配色，代码高亮 + 一键复制</td>
+<td width="50%"><img src="docs/shot-chat-light.png" alt="浅色主题"><br>
+<b>浅色主题</b><br>多轮对话、气泡区分、行内代码</td>
+</tr>
+<tr>
+<td><img src="docs/shot-chat-markdown.png" alt="Markdown 渲染"><br>
+<b>Markdown / 表格 / 代码块</b><br>官方前端自带的渲染层，比自绘的强得多</td>
+<td><img src="docs/shot-chat-sessions.png" alt="多会话"><br>
+<b>多会话</b><br>左侧按时间分组，可重命名、删除、导出</td>
 </tr>
 </table>
+
+---
+
+## 编程界面
+
+聊天界面做不了的三件事，都在这里：
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshot.png" alt="看图问答"><br>
+<b>看图问答</b><br>发一张收据，OCR 结果直接进对话——你能看到原文，模型基于全文回答</td>
+<td width="50%"><img src="docs/shot-tools.png" alt="工具调用"><br>
+<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠，不刷屏</td>
+</tr>
+</table>
+
+顶栏 `⋯` 里还有自检、声明断言、诊断报告、切换模型：
+
+![自检输出：45 项全部 OK](docs/shot-selfcheck.png)
 
 ---
 
