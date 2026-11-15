@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
             pass
 
         self._build()
+        self._wrap_web_panel()
 
         # 重绘节流：80ms 一次。不节流的话每个 token 都重排，界面直接卡死
         self._repaint_timer = QTimer(self)
@@ -215,6 +216,52 @@ class MainWindow(QMainWindow):
         self._repaint_timer.start()
 
     # ================= 构建 =================
+
+    def _wrap_web_panel(self):
+        """把 _build() 建好的界面包进 QStackedWidget，旁边放一页 Web 聊天界面。
+
+        这样不用改 _build() 里那两百行布局代码，回退成本也低：
+        删掉这一次调用就回到纯 Qt 界面。
+        """
+        from PySide6.QtWidgets import QStackedWidget
+
+        try:
+            from ui_web import WebPanel
+        except Exception as exc:                      # noqa: BLE001
+            # 缺 QtWebView 或静态资源时不该影响主程序启动
+            print(f"[webui] 聊天界面不可用：{exc}")
+            return
+
+        old = self.centralWidget()
+        self.stack = QStackedWidget()
+        self.stack.addWidget(old)                     # 0：原 PySide6 界面
+        self.web_panel = WebPanel()
+        self.stack.addWidget(self.web_panel)          # 1：chat-demo
+        self.setCentralWidget(self.stack)
+
+        # 默认进聊天界面（用户要的就是这个「前端」）
+        self.stack.setCurrentIndex(1)
+
+        # 顶栏加一个切换按钮，两个界面来回走
+        from PySide6.QtWidgets import QPushButton
+
+        top = self.findChild(QFrame, "topbar")
+        if top is not None and top.layout() is not None:
+            self.btn_switch = QPushButton("编程界面")
+            self.btn_switch.setObjectName("ghost")
+            self.btn_switch.setFixedHeight(30)
+            self.btn_switch.setToolTip("在聊天界面和编程界面之间切换")
+            self.btn_switch.clicked.connect(self._toggle_view)
+            top.layout().addWidget(self.btn_switch)
+
+    def _toggle_view(self):
+        """聊天 <-> 编程 切换。"""
+        if not hasattr(self, "stack"):
+            return
+        web_now = self.stack.currentIndex() == 1
+        self.stack.setCurrentIndex(0 if web_now else 1)
+        if hasattr(self, "btn_switch"):
+            self.btn_switch.setText("聊天界面" if web_now else "编程界面")
 
     def _build(self):
         root = QWidget()
