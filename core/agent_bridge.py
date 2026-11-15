@@ -300,6 +300,64 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
     # ---------- 核心：一次对话回合 ----------
 
+    def _extract_images(self, content) -> list[Path]:
+        """把 Anthropic 的 base64 图片块落到临时文件，返回路径列表。"""
+        import base64
+        import tempfile
+
+        out: list[Path] = []
+        blocks = content if isinstance(content, list) else []
+        for b in blocks:
+            if not isinstance(b, dict) or b.get("type") != "image":
+                continue
+            src = b.get("source") or {}
+            if src.get("type") != "base64":
+                continue
+            data = src.get("data") or ""
+            media = src.get("media_type") or "image/png"
+            ext = {"image/jpeg": ".jpg", "image/png": ".png",
+                   "image/webp": ".webp", "image/gif": ".gif"}.get(media, ".png")
+            try:
+                raw = base64.b64decode(data)
+            except Exception:                      # noqa: BLE001
+                continue
+            fd, name = tempfile.mkstemp(suffix=ext, prefix="mimo_img_")
+            with __import__("os").fdopen(fd, "wb") as f:
+                f.write(raw)
+            out.append(Path(name))
+        return out
+
+    def _ocr_images(self, images: list[Path]) -> list[str]:
+        """对图片跑本地 OCR，返回识别文字（失败给空串）。
+
+        OCR 引擎由 ui_qt 管（启动时决定是否常驻）。这里直接打 8090，
+        引擎没起就先起一个 —— 三个引擎都在同一台机器上，谁起都行。
+        """
+        if not images:
+            return []
+        try:
+            from core import client, engine as eng
+            from config import OCR_PORT
+        except Exception:                          # noqa: BLE001
+            return []
+
+        results: list[str] = []
+        for img in images:
+            try:
+                text = client.ocr_image(OCR_PORT, img, "doc")
+                results.append(text or "")
+            except Exception:                      # noqa: BLE001
+                # 引擎没起：拉起来再试一次
+                try:
+                    e = eng.make_ocr_engine()
+                    if not e.running:
+                        e.start()
+                    text = client.ocr_image(OCR_PORT, img, "doc")
+                    results.append(text or "")
+                except Exception as exc2:          # noqa: BLE001
+                    results.append(f"（OCR 失败：{exc2}）")
+        return results
+
     def _handle_message(self) -> None:
         body = self._read_json()
         messages = body.get("messages") or []
@@ -307,20 +365,47 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": {"message": "messages 为空", "type": "invalid_request"}})
             return
 
-        # 取最后一条用户消息的文本（历史不再重放，MiMo Code 自己的会话里有）
-        text = ""
+        # 取最后一条用户消息
+        last = None
         for m in reversed(messages):
-            if m.get("role") != "user":
-                continue
-            c = m.get("content")
-            if isinstance(c, str):
-                text = c
-            elif isinstance(c, list):
-                text = "\n".join(
-                    b.get("text", "") for b in c
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-            break
+            if m.get("role") == "user":
+                last = m
+                break
+        if last is None:
+            self._json(400, {"error": {"message": "没有用户消息", "type": "invalid_request"}})
+            return
+
+        raw_content = last.get("content")
+        text = ""
+        if isinstance(raw_content, str):
+            text = raw_content
+        elif isinstance(raw_content, list):
+            text = "\n".join(
+                b.get("text", "") for b in raw_content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+
+        # 图片走本地 OCR，把识别结果当成事实依据拼进消息 ——
+        # 和编程界面同一套逻辑：OCR 结果用户可见，模型拿到的是全文。
+        images = self._extract_images(raw_content)
+        ocr_texts = self._ocr_images(images)
+        for p in images:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:                      # noqa: BLE001
+                pass
+
+        if ocr_texts:
+            parts = []
+            if text.strip():
+                parts.append(f"【用户的问题】\n{text}")
+            else:
+                parts.append("【用户的情况】\n只发了图片，没有写文字说明。")
+            for i, o in enumerate(ocr_texts, 1):
+                parts.append(f"【图片 {i} 的识别结果】\n{o}")
+            parts.append("请基于上面的图片内容回答用户的问题，不要原样照抄图片文字。")
+            text = "\n\n".join(parts)
+
         if not text.strip():
             self._json(400, {"error": {"message": "没有文本内容", "type": "invalid_request"}})
             return
