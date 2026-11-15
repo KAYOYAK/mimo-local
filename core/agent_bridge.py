@@ -272,6 +272,21 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload.encode())
         self.wfile.flush()
 
+    def _sse_safe(self, event: dict) -> bool:
+        """写 SSE，客户端断开时返回 False（不抛）。
+
+        chat-demo 的「停止」按钮只做前端 AbortController.abort()，不会通知后端。
+        前端一断，这里下一次 write 就会 BrokenPipe —— 那一刻就是用户在按停止。
+        捕获它并返回 False，上层据此调 MiMo Code 的 /session/{id}/abort。
+
+        不做这件事的话：界面显示「已停止」，而 9B 还在烧 GPU、工具还在跑。
+        """
+        try:
+            self._sse(event)
+            return True
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            return False
+
     # ---------- 路由 ----------
 
     def do_OPTIONS(self):                          # noqa: N802
@@ -299,6 +314,14 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
 
     # ---------- 核心：一次对话回合 ----------
+
+    def _abort(self, agent_server: ag.AgentServer, session_id: str, why: str) -> None:
+        """真正中断后端回合。chat-demo 的停止按钮只断前端，这里补上后端。"""
+        try:
+            ok = ag.abort_session(agent_server, session_id)
+            print(f"[bridge] 中断 {why}: {'成功' if ok else '失败（可能已结束）'}")
+        except Exception as exc:                   # noqa: BLE001
+            print(f"[bridge] 中断失败: {exc}")
 
     def _extract_images(self, content) -> list[Path]:
         """把 Anthropic 的 base64 图片块落到临时文件，返回路径列表。"""
@@ -457,6 +480,12 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         def on_event(ev: ag.Event) -> None:
             if ev.session_id and ev.session_id != sid:
                 return
+        # 客户端断开（用户按了停止）时置位，事件流线程和收尾逻辑都看它
+        client_gone = threading.Event()
+
+        def on_event(ev: ag.Event) -> None:
+            if ev.session_id and ev.session_id != sid:
+                return
             if ev.type == "message.part.updated" and ev.part:
                 pid = ev.part.get("id") or ""
                 if pid:
@@ -464,14 +493,21 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     last_part_at[0] = time.time()
                 try:
                     for e in tracker.feed(ev.part or {}):
-                        self._sse(e)
+                        if not self._sse_safe(e):
+                            # 客户端断了 = 用户按停止。**必须在这里立即中断**：
+                            # send_message 是阻塞的（最长 900 秒），等它返回来
+                            # 再 abort 就等于没有中断。
+                            client_gone.set()
+                            done.set()
+                            self._abort(agent_server, sid, "用户中断")
+                            return
                 except Exception:                  # noqa: BLE001
                     pass
             elif ev.type == "session.status" and ev.status == "idle":
                 done.set()
 
         self._sse_open()
-        self._sse({
+        if not self._sse_safe({
             "type": "message_start",
             "message": {
                 "id": f"msg_{uuid.uuid4().hex[:24]}",
@@ -481,7 +517,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 "content": [],
                 "usage": {"input_tokens": 0, "output_tokens": 0},
             },
-        })
+        }):
+            # 连 message_start 都写不出去，直接走人
+            self._abort(agent_server, sid, "客户端在回合开始前就断开")
+            return
 
         stream = ag.EventStream(agent_server.base, on_event,
                                 lambda msg: error.append(msg))
@@ -504,11 +543,17 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             while time.time() < deadline:
                 if done.is_set():
                     break
+                if client_gone.is_set():
+                    break
                 if send_ok and last_part_at[0] and time.time() - last_part_at[0] > 8:
                     break
                 time.sleep(0.2)
             stream.stop()
             time.sleep(0.2)
+
+        if client_gone.is_set():
+            # 正常路径已经在 on_event 里中断过了，这里是兜底
+            return
 
         for e in tracker.close_all():
             try:
