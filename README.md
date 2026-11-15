@@ -10,32 +10,12 @@
   <sub>不联网 · 不需要账号 · 所有数据在本机</sub>
 </p>
 
-![演示：发一张收据图，界面自己跑 OCR，缩略图和识别原文进对话，模型基于全文回答](docs/demo.gif)
+![MiMo Local 聊天界面：深色主题、小米橙配色、模型给出的 Python 代码带语法高亮和一键复制](docs/shot-chat.png)
 
-一个 Windows 桌面程序。打开就是编程界面，模型跑在本地显卡上，
-需要看图时点左下角「图片」—— OCR 出来的文字直接成为模型的依据，
-不需要切换模式，也不需要切窗口。
+![演示：输入问题 → 模型流式输出 Markdown（标题、列表、多个代码块全带高亮）](docs/demo-chat.gif)
 
-<p align="center"><i>动图：输入问题 → 选图 → 界面跑 OCR → 模型基于识别结果回答</i></p>
-
----
-
-## 界面
-
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshot.png" alt="看图问答"><br>
-<b>看图问答</b><br>发一张收据，OCR 结果是模型的事实依据，不是让它转述</td>
-<td width="50%"><img src="docs/shot-code.png" alt="写代码"><br>
-<b>写代码</b><br>Markdown 代码块、粗体、列表都正确渲染</td>
-</tr>
-<tr>
-<td><img src="docs/shot-tools.png" alt="工具调用"><br>
-<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠，不刷屏</td>
-<td><img src="docs/shot-history.png" alt="多轮对话"><br>
-<b>多轮对话</b><br>每个对话独立 session，上下文互不干扰</td>
-</tr>
-</table>
+聊天界面基于 [DeepSeek 官方开源的 chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT）
+改造：把 API 指向本机 llama-server，去掉所有云端能力，换成小米橙配色。
 
 ---
 
@@ -64,6 +44,36 @@
 
 模型需要自己读文件、跑命令时，走的是 MiMo Code 的工具调用（bash / read / edit / glob）。
 每一步都是可折叠的，不展开就看不到，不会把回答挤走。
+
+---
+
+## 两个界面
+
+顶栏一个按钮，在两种界面之间切：
+
+<table>
+<tr>
+<td width="50%"><img src="docs/shot-chat-welcome.png" alt="聊天界面"><br>
+<b>聊天界面</b>（默认）<br>DeepSeek 官方前端改造：多会话、分支切换、Markdown/KaTeX/Mermaid 全都有</td>
+<td width="50%"><img src="docs/screenshot.png" alt="编程界面"><br>
+<b>编程界面</b><br>PySide6 自绘：看图问答、工具调用折叠、OCR 原文可见</td>
+</tr>
+</table>
+
+![写代码](docs/shot-code.png)
+
+---
+
+## 界面细节
+
+<table>
+<tr>
+<td width="50%"><img src="docs/shot-tools.png" alt="工具调用"><br>
+<b>工具调用</b><br>读文件、跑命令，每个步骤单独折叠，不刷屏</td>
+<td width="50%"><img src="docs/shot-history.png" alt="多轮对话"><br>
+<b>多轮对话</b><br>每个对话独立 session，上下文互不干扰</td>
+</tr>
+</table>
 
 ---
 
