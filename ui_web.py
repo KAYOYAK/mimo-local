@@ -133,6 +133,20 @@ class WebPanel(QWidget):
             lay.addWidget(QLabel("本地端口被占用，聊天界面无法启动。", self))
             return
 
+        # 启动 Anthropic→MiMo Code 的桥。chat-demo 的 API_ORIGIN 构建时
+        # 指向这里，所以聊天界面发的每条消息都会走 MiMo Code，
+        # 工具调用和 OCR 都在里面发生（三个引擎同时在线）。
+        try:
+            from core.agent_bridge import AgentBridge
+
+            self._bridge = AgentBridge(Path(r"D:\mimo-desktop"))
+            bridge_port = self._bridge.start()
+            if bridge_port:
+                print(f"[ui_web] 桥已启动 http://127.0.0.1:{bridge_port}")
+        except Exception as exc:                     # noqa: BLE001
+            print(f"[ui_web] 桥启动失败：{exc}")
+            self._bridge = None
+
         view = QWebView(None)
         self._view = view
         # QWebView 是 QWindow 子类（QtWebView 走 QML 那套），不能直接塞进
@@ -151,3 +165,9 @@ class WebPanel(QWidget):
 
     def shutdown(self) -> None:
         self._server.stop()
+        bridge = getattr(self, "_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.stop()
+            except Exception:                        # noqa: BLE001
+                pass

@@ -1828,6 +1828,14 @@ class MainWindow(QMainWindow):
                     on_phase=lambda s: self.bridge.status.emit(s, "busy"),
                     workdir=self.workdir,
                 )
+                # 把 agent 交给 Web 前端的桥：聊天界面的每条消息都会
+                # 走 MiMo Code，工具调用和 OCR 都在里面发生。
+                try:
+                    from core import agent_bridge as _ab
+
+                    _ab.set_agent(self.agent)
+                except Exception:                    # noqa: BLE001
+                    pass
 
                 self.bridge.status.emit("就绪", "ok")
                 ocr_tag = "OCR 在线" if self.ocr_live else "OCR 按需"
