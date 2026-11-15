@@ -336,11 +336,12 @@ pwsh -File tools\verify_packaged.ps1 -SkipBuild   # 用现有 dist\ 验证
 
 chat-demo 说的是 Anthropic Messages 格式（`POST /v1/messages` + SSE），
 而 MiMo Code 是 session API（`POST /session/{id}/message` + `GET /event`）——
-两边不通。桥做三件事：
+两边不通。桥做四件事：
 
 1. **翻译请求**：Anthropic messages → session 创建 + 一条文本消息
 2. **翻译事件**：`message.part.updated` → `content_block_delta`
 3. **处理图片**：Anthropic base64 → 临时文件 → OCR → 拼进消息
+4. **接管停止**：见下
 
 ```
 chat-demo --Anthropic--> 桥(8766) --session API--> MiMo Code(4096)
@@ -349,6 +350,23 @@ chat-demo --Anthropic--> 桥(8766) --session API--> MiMo Code(4096)
 ```
 
 桥只监听 `127.0.0.1`，不对外。
+
+#### 停止按钮怎么真正停下来
+
+chat-demo 的停止按钮只做 `AbortController.abort()`——**断前端 fetch，
+后端完全不知道**。旧界面的 `stop_round()` 会调 MiMo Code 的
+`/session/{id}/abort`，这个能力不能丢。
+
+桥的做法：写 SSE 失败（`BrokenPipe` / `ConnectionReset`）就是用户在按停止，
+**当场**调 abort。必须当场 —— `send_message` 是阻塞的（最长 900 秒），
+等它返回再 abort 等于没中断。
+
+实测（发长任务 → 读 4 个事件 → 硬断）：
+
+```
+[bridge] 中断 用户中断: 成功
+session busy=False  消息数=3        <- 后端确实停了
+```
 
 关于 `AGENTS-ocr.md`：模型不是天生知道有 OCR 的。这份文件在每次启动时**按当前
 安装位置生成**（`core/agent.py::_write_agents_md`），然后通过 MiMo Code 的
