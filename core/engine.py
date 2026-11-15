@@ -79,15 +79,24 @@ class Engine:
         # 端口被占：先看是不是上次没关掉的自己人
         if port_in_use(spec.port):
             if self._is_our_server(spec.port):
+                # 上次异常退出（崩溃 / 被强杀 / 拔电源）时子进程不会跟着退。
+                # 让用户去任务管理器手动结束是很差的体验，直接接管：
+                # 先杀掉，再照常启动。_is_our_server 已经确认了加载的是我们的
+                # 模型，所以不会误伤 LM Studio 之类的无关进程。
+                if on_phase:
+                    on_phase("清理上次残留的引擎…")
+                _kill_port(spec.port)
+                time.sleep(2)
+                if port_in_use(spec.port):
+                    raise RuntimeError(
+                        f"端口 {spec.port} 上的残留进程杀不掉（可能需要管理员权限）。\n"
+                        f"请用任务管理器结束 llama-server.exe 后重试。"
+                    )
+            else:
                 raise RuntimeError(
-                    f"端口 {spec.port} 上已经有本程序的引擎在跑了。\n"
-                    f"如果你没看到它，说明上次异常退出留了残留进程——"
-                    f"用任务管理器结束 llama-server.exe 再试。"
+                    f"端口 {spec.port} 被别的程序占用。\n"
+                    f"换个端口，或先关掉占用的程序。"
                 )
-            raise RuntimeError(
-                f"端口 {spec.port} 被别的程序占用。\n"
-                f"换个端口，或先关掉占用的程序。"
-            )
 
         spec.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_fh = open(spec.log_path, "ab")
@@ -214,6 +223,60 @@ def port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _kill_port(port: int) -> bool:
+    """杀掉监听指定端口的进程。返回是否动手了。
+
+    用 netstat + taskkill 而不是 psutil：本机不装第三方库，
+    而 exe 是 onefile 打包，多一个依赖就多一份风险。
+
+    ⚠ 调用前必须先用 _is_our_server / 别的判断确认那是自己的进程 ——
+    这个函数不做任何身份校验，给什么端口的占用者就杀什么。
+    """
+    import subprocess
+
+    killed = False
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15, **_no_window_kwargs(),
+        ).stdout
+    except Exception:                                  # noqa: BLE001
+        return False
+
+    pids: set[int] = set()
+    for line in out.splitlines():
+        up = line.upper()
+        if "TIME_WAIT" in up or "CLOSE_WAIT" in up:
+            continue                                   # 对端残留，没有进程可杀
+        parts = line.split()
+        # 形如：TCP  127.0.0.1:8080  0.0.0.0:0  LISTENING  12345
+        #       0    1                 2          3          4
+        # 只认「本地地址」那一列 —— 第三列是对端，客户端连接的本地端口
+        # 才可能是 8080（比如浏览器连过去），按整行匹配会杀错进程。
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        if not parts[1].endswith(f":{port}"):
+            continue
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid > 0:
+            pids.add(pid)
+
+    for pid in pids:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                capture_output=True, timeout=10, **_no_window_kwargs(),
+            )
+            killed = True
+        except Exception:                              # noqa: BLE001
+            pass
+    return killed
 
 
 def health_ok(port: int) -> bool:

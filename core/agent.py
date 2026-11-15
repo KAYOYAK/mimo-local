@@ -313,10 +313,16 @@ class AgentServer:
             return True
 
         if _port_open(self.port):
-            raise RuntimeError(
-                f"端口 {self.port} 已被占用。\n"
-                f"如果上一轮程序异常退出，用任务管理器结束 mimo.exe 再试。"
-            )
+            # 上一轮异常退出时 mimo serve 不会跟着退，会一直占着 4096。
+            # 让用户去任务管理器手动结束很差，直接接管：确认占用者是
+            # 我们的 mimo.exe 就杀掉重来。
+            if on_phase:
+                on_phase("清理上次残留的 MiMo Code…")
+            if not _reap_own_mimo(self.port):
+                raise RuntimeError(
+                    f"端口 {self.port} 被别的程序占用，而且不是本程序的 mimo.exe。\n"
+                    f"换个端口，或先关掉占用的程序。"
+                )
 
         cwd = Path(workdir) if workdir else config.ROOT
         if not cwd.is_dir():
@@ -459,6 +465,84 @@ class AgentServer:
 
 
 # ---------- 会话操作 ----------
+
+def _reap_own_mimo(port: int) -> bool:
+    """杀掉占用 port 的 **本程序 MIMO_EXE**。返回是否成功接管。
+
+    只杀路径等于 config.MIMO_EXE 的进程 —— 别的程序占着 4096 时
+    必须报错让用户处理，不能瞎杀。
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15,
+        ).stdout
+    except Exception:                                  # noqa: BLE001
+        return False
+
+    pids: set[int] = set()
+    for line in out.splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+        if f":{port} " not in line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid > 0:
+            pids.add(pid)
+
+    if not pids:
+        return False
+
+    want = Path(config.MIMO_EXE).resolve()
+    handled = False
+    for pid in pids:
+        try:
+            r = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}",
+                 "get", "ExecutablePath", "/value"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=10,
+            ).stdout
+        except Exception:                              # noqa: BLE001
+            continue
+        path = ""
+        for line in r.splitlines():
+            if line.startswith("ExecutablePath="):
+                path = line.split("=", 1)[1].strip()
+                break
+        if not path:
+            continue
+        try:
+            same = Path(path).resolve() == want
+        except Exception:                              # noqa: BLE001
+            same = False
+        if not same:
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                capture_output=True, timeout=10,
+            )
+            handled = True
+        except Exception:                              # noqa: BLE001
+            pass
+
+    if handled:
+        import time as _t
+
+        _t.sleep(2)
+        return not _port_open(port)
+    return False
+
 
 def create_session(server: AgentServer, directory: Path) -> str:
     obj = server.api("POST", "/session", {"directory": str(directory)}, timeout=15)
