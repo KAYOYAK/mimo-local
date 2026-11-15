@@ -380,6 +380,37 @@ session busy=False  消息数=3        <- 后端确实停了
 
 ## 自检与断言
 
+### 桥的回归测试
+
+桥（`core/agent_bridge.py`）是最容易出错的一层——协议翻译、会话映射、
+中断接管都在这里。三个场景各自对应一个真踩过的坑：
+
+```bash
+python tools/test_bridge.py              # 三个都跑
+python tools/test_bridge.py -s multi     # 只跑一个
+```
+
+| 场景 | 验什么 | 当时的坑 |
+|---|---|---|
+| `single` | 工具调用能穿过桥 | part→block 映射写错，工具调用静默消失 |
+| `multi` | 第 2 轮记得上文 | session key 带 `len(messages)`，每轮新建 → 失忆 |
+| `abort` | 断连后后端真停 | 只断前端 fetch，9B 继续烧 GPU |
+
+实测 5/5：
+
+```
+OK single/工具调用可见      🔧 ✓ bash {"command": "echo MIMO_TOOL_OK_9917"}
+OK single/命令输出回来
+OK multi/第 2 轮记得上文    回答：7429
+OK multi/新对话是隔离的     回答：3
+OK abort/后端已停          busy=False
+```
+
+**注意**：工具调用走 thinking block（可折叠），所以检查工具调用要看
+`thinking_delta`，只看 `text_delta` 会漏 —— 这一点测试脚本里踩过。
+
+### 自检与断言
+
 两个都是只读的，随时可以跑：
 
 ```bash
