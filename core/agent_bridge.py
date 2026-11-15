@@ -39,6 +39,7 @@ chat-demo 每次请求都带完整历史。这里维护 `conversation_id → ses
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -325,20 +326,23 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     # ---------- 核心：一次对话回合 ----------
 
     def _report_usage(self, reply) -> None:
-        """从 send_message 的返回值里取 token 用量，回调出去。
+        """从 send_message 的返回值里取 token 用量，转给 AgentBridge 的回调。
 
         MiMo Code 的响应形如：
           {"info": {"tokens": {"input": 26560, "output": 5, "reasoning": 0,
                                "cache": {"read": 0, "write": 0}}, ...}, ...}
+
+        注意这是 _BridgeHandler 的方法，回调挂在 AgentBridge 上（见 self.bridge）。
         """
-        if self.on_usage is None or not isinstance(reply, dict):
+        cb = getattr(self.bridge, "on_usage", None)
+        if cb is None or not isinstance(reply, dict):
             return
         try:
             tok = (reply.get("info") or {}).get("tokens") or {}
             used = int(tok.get("input") or 0) + int(tok.get("output") or 0)
             out = int(tok.get("output") or 0)
             if used:
-                self.on_usage(used, out)
+                cb(used, out)
         except Exception:                          # noqa: BLE001
             pass
 
@@ -485,11 +489,19 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             self._json(503, {"error": {"message": "MiMo Code 没在运行", "type": "unavailable"}})
             return
 
-        # 会话键：按历史第一条消息的指纹，让「新对话」和「继续对话」分开
+        # 会话键：按**第一条消息**的指纹，让「新对话」和「继续对话」分开。
+        #
+        # ⚠ key 里绝对不能带 len(messages)。带上的话每多一轮就变一次，
+        # 等于每轮都新建一个 MiMo Code session —— 模型看不到任何上文，
+        # 表现就像失忆。这个坑单轮测试看不出来，只有连问两句才会暴露。
+        #
+        # 已知局限：两个不同对话如果第一条消息一模一样，会共用一个 session。
+        # 彻底解决需要前端带会话 id，但 Anthropic 的请求头/请求体里都没有
+        # 这个字段，chat-demo 也没加 —— 这里只能按内容猜。
         first = messages[0]
         c0 = first.get("content")
         seed = c0 if isinstance(c0, str) else json.dumps(c0, ensure_ascii=False, sort_keys=True)
-        key = f"{seed[:200]}|{len(messages)}"
+        key = hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:16]
 
         try:
             sid = bridge.session_for(agent_server, key)
