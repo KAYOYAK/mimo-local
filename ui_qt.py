@@ -1499,18 +1499,60 @@ class MainWindow(QMainWindow):
             pass
 
     def show_about(self):
+        """关于：版本、组件、下载页、邮箱、备案号。
+
+        为什么不用 QMessageBox：备案号必须是指向 beian.miit.gov.cn 的可点链接
+        （工信部要求），下载页和邮箱也应该是可点的。QMessageBox 的文本支持
+        <a href> 但不处理点击，所以这里自绘一个 QLabel 对话框。
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
+
         from core import hardware
-        QMessageBox.information(
-            self, "关于 MiMo Local",
-            f"MiMo Local v{config.VERSION}\n"
-            "纯本地 AI 编程助手\n\n"
-            f"模型    MiMo V2.6 Distill Qwen 9B（llama.cpp）\n"
-            f"引擎    {config.ENGINE.name}\n"
-            f"OCR     Xiaomi-OCR-0（工具调用）\n"
-            f"Agent   MiMo Code（mimo serve）\n\n"
-            f"{hardware.summary()}\n\n"
-            "不联网 · 不需要账号 · 所有数据在本机",
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("关于 MiMo Local")
+        dlg.setMinimumWidth(500)
+
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        body = QLabel()
+        body.setTextFormat(Qt.RichText)
+        body.setOpenExternalLinks(True)     # <a href> 直接交给系统浏览器 / 邮件客户端
+        body.setWordWrap(True)
+        body.setText(
+            f"<h2 style='margin:0 0 2px 0'>MiMo Local "
+            f"<span style='font-size:14px; font-weight:400'>v{config.VERSION}</span></h2>"
+            "<p style='margin:0 0 8px 0'>纯本地 AI 编程助手</p>"
+            "<table cellpadding='2' cellspacing='0'>"
+            "<tr><td style='padding-right:10px'>模型</td>"
+            "<td>MiMo V2.6 Distill Qwen 9B（llama.cpp）</td></tr>"
+            f"<tr><td style='padding-right:10px'>引擎</td><td>{config.ENGINE.name}</td></tr>"
+            "<tr><td style='padding-right:10px'>OCR</td><td>Xiaomi-OCR-0（工具调用）</td></tr>"
+            "<tr><td style='padding-right:10px'>Agent</td><td>MiMo Code（mimo serve）</td></tr>"
+            "</table>"
+            f"<p style='margin:8px 0'>{hardware.summary()}</p>"
+            "<p style='margin:8px 0'>不联网 · 不需要账号 · 所有数据在本机</p>"
+            "<hr>"
+            "<p style='margin:6px 0'>下载、安装说明和每个版本的更新记录都在 "
+            "<a href='https://nullcmd.top/projects/mimo-local.html#download'>nullcmd.top</a>"
+            "</p>"
+            "<p style='margin:6px 0'>问题反馈："
+            "<a href='mailto:x@nullcmd.top'>x@nullcmd.top</a></p>"
+            # 备案号待定：现在拿到的是站点的 ICP 号（桂ICP备2026027311号），
+            # 而 APP 备案号格式是「桂ICP备2026027311号-XA」，等号下来再补这一行：
+            #   <p style='font-size:11px'>
+            #   <a href='https://beian.miit.gov.cn/'>桂ICP备2026027311号-XA</a></p>
         )
+        lay.addWidget(body)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close, dlg)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        lay.addWidget(btns)
+
+        dlg.exec()
 
     # ================= 渲染 =================
 

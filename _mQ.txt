@@ -1,0 +1,17 @@
+feat: 「关于」加下载页和邮箱，改成可点链接
+
+参照 NULL 的做法，在「关于」里放两处对外入口：
+  下载、安装说明和更新记录 -> https://nullcmd.top/projects/mimo-local.html#download
+  问题反馈 -> mailto:x@nullcmd.top
+
+原来是 QMessageBox（纯文本，链接点不动），改成 QLabel + setOpenExternalLinks(True)，
+系统浏览器和邮件客户端会被直接拉起。
+
+## 备案号暂不展示
+
+拿到的是站点的 ICP 号（桂ICP备2026027311号），而 APP 备案号格式是
+「桂ICP备2026027311号-XA」。现在展示 ICP 号对桌面应用是不对的，
+代码里留了注释和位置，等 APP 号下来再补。
+
+实测：Qt 原生对话框可以用 grab() 自截（WebView 才不行），
+截图确认两个链接都是可点的蓝色样式。
