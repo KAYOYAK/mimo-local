@@ -1,0 +1,7 @@
+fix: 关于页的链接文字改成「MiMo Local 项目页」
+
+原来链接文字写的是 `nullcmd.top`，虽然 href 已经是项目页
+（/projects/mimo-local.html#download），但文字看起来像首页，容易误解。
+
+改成「MiMo Local 项目页（nullcmd.top/projects/mimo-local）」：
+文字说清去哪个页面，括号里给出实际路径。

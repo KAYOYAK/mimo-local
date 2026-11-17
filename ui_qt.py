@@ -1536,8 +1536,8 @@ class MainWindow(QMainWindow):
             "<p style='margin:8px 0'>不联网 · 不需要账号 · 所有数据在本机</p>"
             "<hr>"
             "<p style='margin:6px 0'>下载、安装说明和每个版本的更新记录都在 "
-            "<a href='https://nullcmd.top/projects/mimo-local.html#download'>nullcmd.top</a>"
-            "</p>"
+            "<a href='https://nullcmd.top/projects/mimo-local.html#download'>"
+            "MiMo Local 项目页</a>（nullcmd.top/projects/mimo-local）</p>"
             "<p style='margin:6px 0'>问题反馈："
             "<a href='mailto:x@nullcmd.top'>x@nullcmd.top</a></p>"
             # 备案号待定：现在拿到的是站点的 ICP 号（桂ICP备2026027311号），
