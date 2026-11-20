@@ -1540,10 +1540,16 @@ class MainWindow(QMainWindow):
             "MiMo Local 项目页</a>（nullcmd.top/projects/mimo-local）</p>"
             "<p style='margin:6px 0'>问题反馈："
             "<a href='mailto:x@nullcmd.top'>x@nullcmd.top</a></p>"
-            # 备案号待定：现在拿到的是站点的 ICP 号（桂ICP备2026027311号），
-            # 而 APP 备案号格式是「桂ICP备2026027311号-XA」，等号下来再补这一行：
-            #   <p style='font-size:11px'>
-            #   <a href='https://beian.miit.gov.cn/'>桂ICP备2026027311号-XA</a></p>
+            # 备案号暂不展示，两个都还没定：
+            #
+            # 1. ICP 备案号：站点已拿到「桂ICP备2026027311号」，但 APP 那部分
+            #    工信部还在审，下来后可能是在同一串号后加「-A2」这样的应用后缀
+            #    （不是 -XA）。等号下来再补：
+            #      <a href='https://beian.miit.gov.cn/'>桂ICP备2026027311号-A2</a>
+            #
+            # 2. 公安备案号：公安联网备案已通过，但那是**网站**的号（公网安备 … 号），
+            #    官方口径里 APP 似乎不单独发这个号。桌面应用是否需要展示待确认，
+            #    不确定就不放 —— 放错比不放更麻烦。
         )
         lay.addWidget(body)
 
