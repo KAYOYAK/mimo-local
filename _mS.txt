@@ -1,0 +1,29 @@
+chore: 更新 llama.cpp 和 MiMo Code 到最新版
+
+## llama.cpp b11270 -> b12559
+
+跳过 1289 个 build（2026-09-30 -> 2026-11-20）。CUDA 13.4 -> 13.5。
+
+**版本号从 0.5.0-dev 跳到 1.0.0-dev**，属于大版本，所以先逐项验证了
+我们依赖的全部参数：
+
+    -m / --mmproj / --host / -c / -ngl / --flash-attn
+    -ctk / -ctv / --reasoning-format
+
+全部仍在，q8_0 KV 缓存类型也支持。实测 9B 加载 16 秒就绪。
+
+## MiMo Code 0.1.16 -> 0.1.17
+
+mimo serve 1 秒就绪。
+
+## 回归
+
+tools/test_bridge.py 四个场景 6/6 通过：
+  single/工具调用可见 · single/命令输出回来
+  multi/第 2 轮记得上文（7429）· multi/新对话是隔离的
+  ocr/识别结果进了上下文（命中 MR. D.I.Y. / 5.90 / CLOTH PEG）
+  abort/后端已停（5 个 session 全部 busy=False）
+
+旧版本保留在磁盘上可回滚：
+  D:\llama.cpp\llama-b11270-bin-win-cuda-13.4-x64\
+  assets\mimo.exe.0.1.16.bak

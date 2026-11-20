@@ -138,7 +138,7 @@ session 还留在磁盘上。这个菜单项筛出 7 天没动过的，确认后
 仓库**不包含**模型和引擎（太大）。你需要自己准备：
 
 ```
-D:\llama.cpp\llama-b11270-bin-win-cuda-13.4-x64\
+D:\llama.cpp\llama-b12559-bin-win-cuda-13.5-x64\
     └─ llama-server.exe                    ← llama.cpp 官方预编译包
 
 D:\models\MiMo-9B-GGUF\
@@ -146,7 +146,7 @@ D:\models\MiMo-9B-GGUF\
     └─ mmproj-MiMo-V2.6-Distill-Qwen-9B-f16.gguf（0.86 GB）
 
 <项目目录>\assets\
-    ├─ mimo.exe                            ← MiMo Code 0.1.16（约 130 MB）
+    ├─ mimo.exe                            ← MiMo Code 0.1.17（约 130 MB）
     └─ ocr\
         ├─ Xiaomi-OCR-0-Q5_K_M.gguf        （0.54 GB）
         └─ mmproj-Xiaomi-OCR-0-F16.gguf    （0.19 GB）
