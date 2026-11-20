@@ -1,0 +1,29 @@
+chore: Python 3.15.0 -> 3.15.2，并把旧版本全部清掉
+
+按「只保留最新」的要求：
+
+## 已删除
+
+  llama.cpp  cudart-llama-bin-win-cuda-13.4-x64   522.8 MB  （旧的 CUDA 13.4 运行时）
+  D:\mimo-desktop\MiMoLocal.exe                    37.9 MB  （11-07 的旧构建）
+  Python 3.15.0                                   417.9 MB
+  Python 3.14.10                                  118.3 MB
+  旧 python shim                                    ~0 MB
+
+## 已升级
+
+  Python 3.15.0 -> 3.15.2
+
+## 顺带修好的
+
+上一轮删 Python 3.14 时把 uv.exe 一起删了（它装在 3.14 的 Scripts 下）。
+现在重新装到 3.15.2、复制进 PATH，uv 0.13.9 可用。
+
+## 验证
+
+  python --version   -> 3.15.2
+  PySide6/PyInstaller -> 6.12.0 / 6.22.3
+  QtWebView          -> ✓
+  main.py --selfcheck -> 45/45
+  PyInstaller 打包    -> 48s 成功
+  exe --version       -> MiMo Local 1.2.3 / Python 3.15.2
