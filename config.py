@@ -54,7 +54,7 @@ ENGINE_ROOT = Path(r"D:\llama.cpp")
 # ---------- 推理引擎 ----------
 # U 盘项目里锁定的那一份（b11270 / CUDA 13.4）。
 # CUDA 运行库走系统 PATH，引擎目录里不需要额外 DLL。
-ENGINE = Path(r"D:\llama.cpp\llama-b12559-bin-win-cuda-13.5-x64\llama-server.exe")
+ENGINE = Path(r"D:\llama.cpp\llama-b12600-bin-win-cuda-13.5-x64\llama-server.exe")
 
 # ---------- 聊天模型（MiMo V2.6 Distill Qwen 9B）----------
 MODEL_DIR = Path(r"D:\models\MiMo-9B-GGUF")

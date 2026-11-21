@@ -1,0 +1,27 @@
+fix: llama.cpp 路径更新到 b12600（b12559 已被删除）
+
+## 问题
+
+全局工具链升级后，`D:\llama.cpp` 里只剩 `llama-b12600-...`，b12559 已经被删。
+而 `config.py` 还指着 b12559 —— **MiMo Local 起不了引擎了**。
+
+这是「硬编码路径 vs 外部环境变化」的典型断裂：config.py 里写死的
+`ENGINE = Path(r"D:\llama.cpp\llama-b12559-...")` 在外部目录被替换后静默失效，
+没有编译期检查能拦住。
+
+## 修法
+
+config.py 和 README 的路径改成 b12600。实测 8080 16 秒就绪。
+
+## 回归
+
+test_bridge.py 四个场景 6/6（llama.cpp b12600 + MiMo Code 0.1.17）：
+  single/工具调用可见 · single/命令输出回来
+  multi/第 2 轮记得上文 · multi/新对话是隔离的
+  ocr/识别结果进了上下文 · abort/后端已停
+
+## 顺带验证的
+
+全局 pnpm 从 11.7 升到 12.21.0，chat-demo 在 12.21.0 下构建正常
+（Rspack compiled successfully，产物 hash 与之前一致 main.00cdb417.js），
+所以不需要重新同步 webui。
